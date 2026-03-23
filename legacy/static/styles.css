@@ -1,0 +1,511 @@
+/* ========================================
+   PROFESSIONAL FINANCIAL TERMINAL STYLING
+   E*TRADE / Bloomberg Aesthetic
+   ======================================== */
+
+/* Main App Background - Dark Navy */
+.stApp {
+    background-color: #1a1f2e;
+    color: #e8e9ed;
+}
+
+/* Remove Streamlit Branding */
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+header {visibility: hidden;}
+
+/* ========================================
+   TYPOGRAPHY - Professional & Readable
+   ======================================== */
+
+/* Headers */
+h1, h2, h3 {
+    color: #ffffff;
+    font-family: 'Segoe UI', 'Arial', sans-serif;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+}
+
+h1 {
+    font-size: 24px;
+    border-bottom: 2px solid #2e5090;
+    padding-bottom: 8px;
+    margin-bottom: 20px;
+}
+
+h2 {
+    font-size: 18px;
+    color: #8fa3d1;
+    margin-top: 24px;
+}
+
+h3 {
+    font-size: 16px;
+    color: #6b7fa8;
+}
+
+/* Body Text */
+p, div, span {
+    font-family: 'Segoe UI', 'Arial', sans-serif;
+    color: #d1d5db;
+}
+
+/* ========================================
+   DATA TABLES - E*TRADE Style
+   ======================================== */
+
+/* DataFrame Styling */
+.dataframe {
+    background-color: #242936 !important;
+    border: 1px solid #2e3648 !important;
+    font-family: 'Consolas', 'Courier New', monospace !important;
+    font-size: 13px !important;
+}
+
+/* Table Headers */
+.dataframe thead tr {
+    background-color: #2e5090 !important;
+}
+
+.dataframe thead th {
+    background-color: #2e5090 !important;
+    color: #ffffff !important;
+    font-weight: 600 !important;
+    padding: 10px 8px !important;
+    border: 1px solid #3d5d9f !important;
+    text-align: left !important;
+}
+
+/* Table Rows */
+.dataframe tbody tr {
+    background-color: #242936 !important;
+    border-bottom: 1px solid #2e3648 !important;
+}
+
+.dataframe tbody tr:hover {
+    background-color: #2d3442 !important;
+}
+
+/* Table Cells */
+.dataframe tbody td {
+    color: #e8e9ed !important;
+    padding: 8px !important;
+    border: 1px solid #2e3648 !important;
+}
+
+/* ========================================
+   METRICS & KPI CARDS
+   ======================================== */
+
+/* Streamlit Metric Cards */
+[data-testid="stMetricValue"] {
+    font-size: 28px;
+    font-weight: 700;
+    color: #ffffff;
+    font-family: 'Consolas', monospace;
+}
+
+[data-testid="stMetricLabel"] {
+    font-size: 12px;
+    color: #8fa3d1;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    font-weight: 500;
+}
+
+[data-testid="stMetricDelta"] {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+/* Metric Container */
+[data-testid="metric-container"] {
+    background-color: #242936;
+    border: 1px solid #2e5090;
+    border-radius: 4px;
+    padding: 16px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+/* ========================================
+   TABS - Professional Navigation
+   ======================================== */
+
+.stTabs {
+    background-color: #1a1f2e;
+}
+
+.stTabs [data-baseweb="tab-list"] {
+    gap: 2px;
+    background-color: #1a1f2e;
+    border-bottom: 2px solid #2e5090;
+}
+
+.stTabs [data-baseweb="tab"] {
+    background-color: #242936;
+    border: 1px solid #2e3648;
+    border-bottom: none;
+    color: #8fa3d1;
+    padding: 12px 24px;
+    font-weight: 500;
+    font-size: 14px;
+}
+
+.stTabs [data-baseweb="tab"]:hover {
+    background-color: #2d3442;
+    color: #ffffff;
+}
+
+.stTabs [aria-selected="true"] {
+    background-color: #2e5090 !important;
+    color: #ffffff !important;
+    font-weight: 600;
+    border-bottom: 3px solid #4a7cd6 !important;
+}
+
+/* ========================================
+   INPUT ELEMENTS - Clean & Professional
+   ======================================== */
+
+/* Text Inputs */
+.stTextInput input {
+    background-color: #242936 !important;
+    border: 1px solid #2e5090 !important;
+    color: #ffffff !important;
+    font-size: 14px;
+    padding: 10px;
+    border-radius: 4px;
+}
+
+.stTextInput input:focus {
+    border-color: #4a7cd6 !important;
+    box-shadow: 0 0 0 2px rgba(74, 124, 214, 0.2) !important;
+}
+
+/* Select Boxes */
+.stSelectbox > div > div {
+    background-color: #242936 !important;
+    border: 1px solid #2e5090 !important;
+    color: #ffffff !important;
+}
+
+.stSelectbox [data-baseweb="select"] {
+    background-color: #242936 !important;
+}
+
+/* Number Inputs */
+.stNumberInput input {
+    background-color: #242936 !important;
+    border: 1px solid #2e5090 !important;
+    color: #ffffff !important;
+    font-family: 'Consolas', monospace;
+}
+
+/* ========================================
+   BUTTONS - Professional CTAs
+   ======================================== */
+
+.stButton button {
+    background-color: #2e5090;
+    color: #ffffff;
+    border: none;
+    border-radius: 4px;
+    padding: 10px 24px;
+    font-size: 14px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+.stButton button:hover {
+    background-color: #4a7cd6;
+}
+
+.stButton button:active {
+    background-color: #1e4080;
+}
+
+/* Primary Action Button - Muted Green */
+.stButton button[kind="primary"] {
+    background-color: #2d5a3d;
+    color: #ffffff;
+}
+
+.stButton button[kind="primary"]:hover {
+    background-color: #3a6e4f;
+}
+
+.stButton button[kind="primary"]:active {
+    background-color: #234831;
+}
+
+/* ========================================
+   SIDEBAR - Terminal Panel Style
+   ======================================== */
+
+[data-testid="stSidebar"] {
+    background-color: #1a1f2e;
+    border-right: 2px solid #2e5090;
+}
+
+[data-testid="stSidebar"] .block-container {
+    padding-top: 2rem;
+}
+
+/* Sidebar Headers */
+[data-testid="stSidebar"] h1,
+[data-testid="stSidebar"] h2,
+[data-testid="stSidebar"] h3 {
+    color: #8fa3d1;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-top: 20px;
+    border-bottom: 1px solid #2e3648;
+    padding-bottom: 8px;
+}
+
+/* ========================================
+   CHARTS - Professional Styling
+   ======================================== */
+
+/* Plotly Charts */
+.js-plotly-plot {
+    background-color: #242936 !important;
+    border: 1px solid #2e3648;
+    border-radius: 4px;
+}
+
+/* Chart Container */
+[data-testid="stPlotlyChart"] {
+    background-color: #242936;
+    padding: 16px;
+    border-radius: 4px;
+    border: 1px solid #2e5090;
+}
+
+/* ========================================
+   ALERTS & MESSAGES
+   ======================================== */
+
+/* Success Messages */
+.stSuccess {
+    background-color: #1a2e23 !important;
+    border-left: 4px solid #3a6e4f !important;
+    color: #7cb89d !important;
+    padding: 12px;
+    border-radius: 4px;
+}
+
+/* Error Messages */
+.stError {
+    background-color: #3d0d0d !important;
+    border-left: 4px solid #ff3b30 !important;
+    color: #ff6b6b !important;
+    padding: 12px;
+    border-radius: 4px;
+}
+
+/* Warning Messages */
+.stWarning {
+    background-color: #3d2e0d !important;
+    border-left: 4px solid #ffb800 !important;
+    color: #ffd966 !important;
+    padding: 12px;
+    border-radius: 4px;
+}
+
+/* Info Messages */
+.stInfo {
+    background-color: #0d2a3d !important;
+    border-left: 4px solid #4a7cd6 !important;
+    color: #8fa3d1 !important;
+    padding: 12px;
+    border-radius: 4px;
+}
+
+/* ========================================
+   EXPANDER - Collapsible Sections
+   ======================================== */
+
+.streamlit-expanderHeader {
+    background-color: #242936 !important;
+    border: 1px solid #2e5090 !important;
+    color: #8fa3d1 !important;
+    font-weight: 600;
+    border-radius: 4px;
+    padding: 12px;
+}
+
+.streamlit-expanderHeader:hover {
+    background-color: #2d3442 !important;
+    color: #ffffff !important;
+}
+
+.streamlit-expanderContent {
+    background-color: #1f2430 !important;
+    border: 1px solid #2e3648 !important;
+    border-top: none;
+    padding: 16px;
+}
+
+/* ========================================
+   SCROLLBARS - Custom Terminal Style
+   ======================================== */
+
+::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+}
+
+::-webkit-scrollbar-track {
+    background: #1a1f2e;
+    border: 1px solid #2e3648;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #2e5090;
+    border-radius: 6px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #4a7cd6;
+}
+
+/* ========================================
+   LOADING SPINNER
+   ======================================== */
+
+.stSpinner > div {
+    border-top-color: #4a7cd6 !important;
+}
+
+/* ========================================
+   CODE BLOCKS - Monospace Data
+   ======================================== */
+
+code {
+    background-color: #242936 !important;
+    color: #7cb89d !important;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 13px;
+}
+
+pre {
+    background-color: #242936 !important;
+    border: 1px solid #2e3648 !important;
+    border-radius: 4px;
+    padding: 12px;
+}
+
+/* ========================================
+   SLIDER STYLING - Fixed
+   ======================================== */
+
+/* Slider Container */
+[data-testid="stSlider"] {
+    padding: 8px 0;
+}
+
+/* Slider Label */
+[data-testid="stSlider"] label {
+    color: #8fa3d1 !important;
+    font-size: 13px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* Slider track background */
+.stSlider [data-baseweb="slider"] > div:first-child {
+    background: #2e3648 !important;
+    border-radius: 10px !important;
+    height: 6px !important;
+}
+
+/* Slider filled portion */
+.stSlider [data-baseweb="slider"] > div:first-child > div {
+    background: #2e5090 !important;
+    border-radius: 10px !important;
+}
+
+/* Slider thumb (draggable circle) */
+.stSlider [data-baseweb="slider"] [role="slider"] {
+    background-color: #4a7cd6 !important;
+    border: 3px solid #1a1f2e !important;
+    width: 18px !important;
+    height: 18px !important;
+    border-radius: 50% !important;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.3) !important;
+    transition: background-color 0.15s ease !important;
+}
+
+/* Slider thumb hover - NO TRANSFORM */
+.stSlider [data-baseweb="slider"] [role="slider"]:hover {
+    background-color: #5a8ce6 !important;
+    box-shadow: 0 2px 6px rgba(74,124,214,0.4) !important;
+}
+
+/* Slider thumb focus */
+.stSlider [data-baseweb="slider"] [role="slider"]:focus {
+    outline: none !important;
+    box-shadow: 0 0 0 4px rgba(74,124,214,0.2) !important;
+}
+
+/* Min/max value labels */
+[data-testid="stTickBarMin"],
+[data-testid="stTickBarMax"] {
+    color: #6b7fa8 !important;
+    font-family: 'Consolas', monospace !important;
+    font-size: 11px !important;
+}
+
+/* Current value display */
+.stSlider [data-testid="stThumbValue"] {
+    color: #4a7cd6 !important;
+    font-family: 'Consolas', monospace !important;
+    font-size: 13px !important;
+    font-weight: 600 !important;
+}
+
+/* ========================================
+   RESPONSIVE ADJUSTMENTS
+   ======================================== */
+
+@media (max-width: 768px) {
+    h1 {
+        font-size: 20px;
+    }
+    
+    .dataframe {
+        font-size: 11px !important;
+    }
+    
+    [data-testid="stMetricValue"] {
+        font-size: 22px;
+    }
+}
+
+/* ========================================
+   BLOOMBERG-STYLE DENSITY
+   ======================================== */
+
+/* Tighter Spacing for Data Density */
+.block-container {
+    padding-top: 2rem;
+    padding-bottom: 0rem;
+    max-width: 100%;
+}
+
+.element-container {
+    margin-bottom: 0.5rem;
+}
+
+/* Compact Row Spacing */
+.row-widget {
+    padding: 4px 0;
+}

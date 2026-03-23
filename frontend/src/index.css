@@ -1,0 +1,58 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Warm backgrounds */
+    --cream: #faf8f3;
+    --warm-white: #fffef9;
+
+    /* Text hierarchy */
+    --ink: #1a1a1a;
+    --dark-brown: #3d3027;
+    --mid-brown: #6b5d52;
+    --light-brown: #a89984;
+
+    /* Accents */
+    --accent: #21827B;
+    --accent-hover: #1A6B65;
+    --warm-tan: #d4a574;
+
+    /* Feedback */
+    --error: #c13a3a;
+    --warning: #d97706;
+    --success: #2d6a4f;
+  }
+
+  body {
+    font-family: Georgia, 'Times New Roman', serif;
+    background-color: var(--cream);
+    color: var(--ink);
+    line-height: 1.6;
+  }
+
+  /* UI elements use system sans-serif */
+  button, input, select, textarea, label, th, td {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  }
+
+  h1, h2, h3 {
+    font-family: Georgia, 'Times New Roman', serif;
+  }
+}
+
+@layer components {
+  /* Hard shadow utilities for brutalist style */
+  .shadow-hard {
+    box-shadow: 4px 4px 0 var(--ink);
+  }
+
+  .shadow-hard-sm {
+    box-shadow: 2px 2px 0 var(--ink);
+  }
+
+  .shadow-hard-lg {
+    box-shadow: 6px 6px 0 var(--ink);
+  }
+}

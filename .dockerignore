@@ -1,0 +1,45 @@
+# Git
+.git
+.gitignore
+
+# Environment files
+.env*
+!.env.example
+
+# Python
+**/__pycache__
+**/*.pyc
+**/*.pyo
+.pytest_cache
+.coverage
+htmlcov
+*.egg-info
+
+# Node
+**/node_modules
+frontend/dist
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Documentation (not needed in container)
+*.md
+!frontend/README.md
+
+# Tests (not needed in production)
+backend/tests
+.pytest_cache
+
+# Legacy code
+legacy
+
+# Claude Code
+.claude
+
+# Local development
+docker-compose.yml
+backend/Dockerfile
+frontend/Dockerfile

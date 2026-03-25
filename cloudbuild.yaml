@@ -1,0 +1,59 @@
+# Cloud Build configuration for Danecast Trades
+# Builds and deploys to Cloud Run
+
+steps:
+  # Build the Docker image
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/danecast-trades:$COMMIT_SHA'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/danecast-trades:latest'
+      - '.'
+
+  # Push to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'gcr.io/$PROJECT_ID/danecast-trades:$COMMIT_SHA'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'gcr.io/$PROJECT_ID/danecast-trades:latest'
+
+  # Deploy to Cloud Run
+  # NOTE: Secrets must be created in Secret Manager first (see DEPLOY.md)
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - 'danecast-trades'
+      - '--image'
+      - 'gcr.io/$PROJECT_ID/danecast-trades:$COMMIT_SHA'
+      - '--region'
+      - 'us-central1'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+      - '--set-env-vars'
+      - 'ENVIRONMENT=production'
+      - '--set-secrets'
+      - 'NEON_DATABASE_URL=neon-database-url:latest,FMP_API_KEY=fmp-api-key:latest,PUSHOVER_USER_KEY=pushover-user-key:latest,PUSHOVER_API_TOKEN=pushover-api-token:latest,SCHEDULER_SECRET=scheduler-secret:latest'
+      - '--min-instances'
+      - '0'
+      - '--max-instances'
+      - '1'
+      - '--memory'
+      - '512Mi'
+      - '--cpu'
+      - '1'
+
+images:
+  - 'gcr.io/$PROJECT_ID/danecast-trades:$COMMIT_SHA'
+  - 'gcr.io/$PROJECT_ID/danecast-trades:latest'
+
+options:
+  logging: CLOUD_LOGGING_ONLY

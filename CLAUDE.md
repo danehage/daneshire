@@ -146,22 +146,22 @@ docker-compose up    # runs both backend + frontend
 Follow this sequence. Complete each step before starting the next.
 
 1. ✅ Project scaffold (directories, init files, docker-compose, env template)
-2. ◻ FastAPI skeleton + health check route + Neon connection test
-3. ◻ Alembic setup + first migration (watchlist_items table)
-4. ◻ Watchlist CRUD: models → schemas → routes → tests
-5. ◻ Frontend scaffold (Vite + Tailwind + React Router + TanStack Query)
-6. ◻ Watchlist page (calls API, displays list, add/edit/delete)
-7. ◻ Price targets: models → schemas → routes → frontend
-8. ◻ Journal entries: models → schemas → routes → frontend
-9. ◻ Port scanner engine: services/scanner.py + services/indicators.py
-10. ◻ Scanner routes + SSE progress + frontend scanner page
-11. ◻ Scanner → Watchlist flow ("add to watchlist" from scan results)
-12. ◻ Ticker detail page (analysis + targets + journal + alerts in one view)
-13. ◻ Alerts: models → schemas → routes → condition evaluator → tests
-14. ◻ Alert engine: Cloud Scheduler endpoints + Pushover integration
-15. ◻ Alerts frontend page + alert creation form
-16. ◻ Dashboard home page (summary cards, recent activity)
-17. ◻ Deploy: Dockerfile → Cloud Build → Cloud Run + Cloud Scheduler setup
+2. ✅ FastAPI skeleton + health check route + Neon connection test
+3. ✅ Alembic setup + first migration (watchlist_items table)
+4. ✅ Watchlist CRUD: models → schemas → routes → tests
+5. ✅ Frontend scaffold (Vite + Tailwind + React Router + TanStack Query)
+6. ✅ Watchlist page (calls API, displays list, add/edit/delete)
+7. ✅ Price targets: models → schemas → routes → frontend
+8. ✅ Journal entries: models → schemas → routes → frontend
+9. ✅ Port scanner engine: services/scanner.py + services/indicators.py
+10. ✅ Scanner routes + SSE progress + frontend scanner page
+11. ✅ Scanner → Watchlist flow ("add to watchlist" from scan results)
+12. ✅ Ticker detail page (analysis + targets + journal + alerts in one view)
+13. ✅ Alerts: models → schemas → routes → condition evaluator → tests
+14. ✅ Alert engine: Cloud Scheduler endpoints + Pushover integration
+15. ✅ Alerts frontend page + alert creation form
+16. ✅ Dashboard home page (summary cards, recent activity)
+17. ✅ Deploy: Dockerfile → Cloud Build → Cloud Run + Cloud Scheduler setup
 
 Update checkboxes and add notes after each session.
 

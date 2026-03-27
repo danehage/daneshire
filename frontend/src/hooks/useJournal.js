@@ -4,6 +4,7 @@ import {
   createJournalEntry,
   updateJournalEntry,
   deleteJournalEntry,
+  searchJournal,
 } from "../api/journal";
 
 export function useJournalEntries(watchlistId) {
@@ -38,5 +39,14 @@ export function useDeleteJournalEntry(watchlistId) {
     mutationFn: (entryId) => deleteJournalEntry(entryId),
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: ["journal", watchlistId] }),
+  });
+}
+
+export function useJournalSearch(query, entryType = null) {
+  return useQuery({
+    queryKey: ["journal-search", query, entryType],
+    queryFn: () => searchJournal(query, entryType),
+    enabled: query?.length >= 2,
+    staleTime: 30000, // Cache results for 30 seconds
   });
 }

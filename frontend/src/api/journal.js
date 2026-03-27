@@ -32,3 +32,11 @@ export async function deleteJournalEntry(entryId) {
   });
   if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`);
 }
+
+export async function searchJournal(query, entryType = null, limit = 50) {
+  const params = new URLSearchParams({ q: query, limit: String(limit) });
+  if (entryType) params.append("entry_type", entryType);
+  const res = await fetch(`${API_BASE}/api/journal/search?${params}`);
+  if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`);
+  return res.json();
+}

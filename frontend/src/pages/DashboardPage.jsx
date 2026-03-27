@@ -1,5 +1,7 @@
-import { Link } from "react-router-dom";
+import { useState, useEffect, useRef } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { useDashboardSummary } from "../hooks/useDashboard";
+import { useJournalSearch } from "../hooks/useJournal";
 
 const ENTRY_TYPE_COLORS = {
   thesis: "bg-accent text-warm-white",
@@ -87,6 +89,131 @@ function JournalEntryRow({ entry }) {
   );
 }
 
+function JournalSearch() {
+  const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const containerRef = useRef(null);
+  const navigate = useNavigate();
+
+  // Debounce search input
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedQuery(query), 300);
+    return () => clearTimeout(timer);
+  }, [query]);
+
+  // Click outside to close dropdown
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (containerRef.current && !containerRef.current.contains(e.target)) {
+        setQuery("");
+        setDebouncedQuery("");
+      }
+    }
+    if (debouncedQuery.length >= 2) {
+      document.addEventListener("mousedown", handleClickOutside);
+      return () => document.removeEventListener("mousedown", handleClickOutside);
+    }
+  }, [debouncedQuery]);
+
+  const { data: results, isLoading, error } = useJournalSearch(debouncedQuery);
+  const showResults = debouncedQuery.length >= 2;
+
+  function handleResultClick(ticker) {
+    setQuery("");
+    setDebouncedQuery("");
+    navigate(`/ticker/${ticker}`);
+  }
+
+  function handleKeyDown(e) {
+    if (e.key === "Escape") {
+      setQuery("");
+      setDebouncedQuery("");
+      e.target.blur();
+    }
+  }
+
+  return (
+    <div className="relative" ref={containerRef}>
+      <div className="border-2 border-ink shadow-hard bg-warm-white">
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={handleKeyDown}
+          placeholder="Search journal entries..."
+          className="w-full px-4 py-3 bg-transparent text-ink placeholder-light-brown focus:outline-none"
+        />
+      </div>
+
+      {showResults && (
+        <div className="absolute z-10 w-full mt-2 border-2 border-ink shadow-hard bg-warm-white max-h-80 overflow-y-auto">
+          {isLoading && (
+            <div className="py-4 text-center text-mid-brown">Searching...</div>
+          )}
+          {error && (
+            <div className="py-4 text-center text-error">
+              Error: {error.message}
+            </div>
+          )}
+          {results && results.length === 0 && (
+            <div className="py-4 text-center text-mid-brown">
+              No results found
+            </div>
+          )}
+          {results && results.length > 0 && (
+            <>
+              <div className="px-4 py-2 text-xs text-light-brown border-b border-ink">
+                {results.length} result{results.length !== 1 && "s"}
+              </div>
+              {results.map((entry) => (
+                <div
+                  key={entry.id}
+                  onClick={() => handleResultClick(entry.ticker)}
+                  className="cursor-pointer"
+                >
+                  <SearchResultRow entry={entry} />
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SearchResultRow({ entry }) {
+  const truncatedContent =
+    entry.content.length > 120
+      ? entry.content.substring(0, 120) + "..."
+      : entry.content;
+
+  return (
+    <div className="border-b-2 border-ink last:border-b-0 py-4 px-4 hover:bg-cream transition-colors">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="font-serif text-lg text-ink hover:text-accent">
+              {entry.ticker}
+            </span>
+            <span
+              className={`text-xs px-2 py-0.5 border border-ink uppercase tracking-wide ${
+                ENTRY_TYPE_COLORS[entry.entry_type] || "bg-light-brown text-warm-white"
+              }`}
+            >
+              {entry.entry_type}
+            </span>
+          </div>
+          <p className="text-sm text-mid-brown line-clamp-2">{truncatedContent}</p>
+        </div>
+        <span className="text-xs text-light-brown whitespace-nowrap">
+          {formatDate(entry.created_at)}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export default function DashboardPage() {
   const { data, isLoading, error } = useDashboardSummary();
 
@@ -108,11 +235,16 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="font-serif text-4xl text-ink mb-2">Danecast Trades</h1>
-        <p className="text-mid-brown">
-          Stock research terminal for swing trading and options strategies.
-        </p>
+      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+        <div>
+          <h1 className="font-serif text-4xl text-ink mb-2">Danecast Trades</h1>
+          <p className="text-mid-brown">
+            Stock research terminal for swing trading and options strategies.
+          </p>
+        </div>
+        <div className="w-full md:w-80">
+          <JournalSearch />
+        </div>
       </div>
 
       {/* Summary Cards */}

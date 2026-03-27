@@ -27,3 +27,16 @@ class JournalEntryResponse(BaseModel):
     content: str
     created_at: datetime
     updated_at: datetime
+
+
+class JournalSearchResult(BaseModel):
+    """Journal entry with ticker context for search results."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    watchlist_id: UUID
+    ticker: str
+    entry_type: str
+    content: str
+    created_at: datetime
+    updated_at: datetime

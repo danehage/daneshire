@@ -129,6 +129,14 @@ export default function TickerDetailPage() {
     );
   }
 
+  if (!analysis) {
+    return (
+      <div className="py-12 text-center text-mid-brown">
+        Loading {symbol?.toUpperCase()}...
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-8">
       {/* Header */}

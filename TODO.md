@@ -222,9 +222,34 @@
 
 ---
 
-## Where We Left Off (2026-03-25)
+### Session 3 — 2026-03-26
+**Goal:** Add journal search feature + bug fixes
 
-**Status:** ALL 17 STEPS COMPLETE
+**Journal Search Feature:**
+- Created `GET /api/journal/search` endpoint with:
+  - Case-insensitive substring search across all journal entries
+  - Optional `entry_type` filter
+  - Configurable `limit` (default 50, max 200)
+  - SQL injection prevention via proper LIKE wildcard escaping
+- Added `JournalSearchResult` schema (includes ticker from joined WatchlistItem)
+- Frontend: `searchJournal()` API client + `useJournalSearch()` hook
+- Dashboard: JournalSearch component with debounced input and dropdown results
+- Click result navigates to ticker detail page
+- 25 tests for journal search endpoint
+
+**Bug Fixes:**
+- Fixed null reference bug in `alert_engine.py` — `evaluate_alert()` can return None for inactive alerts, added null checks before accessing `history.condition_met`
+- Fixed crash in `TickerDetailPage.jsx` — added null guard for `analysis` when query data is undefined
+- Removed dead code `VALID_ENTRY_TYPES` constant in `journal.py` (unused, validation via Pydantic Literal type)
+- Added `model_config` to `JournalSearchResult` for consistency with other response schemas
+
+**Tests:** 86 passing (up from 61)
+
+---
+
+## Where We Left Off (2026-03-26)
+
+**Status:** ALL 17 STEPS COMPLETE + Journal Search Feature
 
 **Local development:**
 ```bash
@@ -239,7 +264,7 @@ cd frontend && npm run dev
 See `DEPLOY.md` for full Cloud Run + Cloud Scheduler setup.
 
 **What's working:**
-- Dashboard with summary cards and recent activity
+- Dashboard with summary cards, recent activity, and journal search
 - Full watchlist CRUD with drag-and-drop reordering
 - Price targets per watchlist item
 - Journal entries with type badges
@@ -252,7 +277,7 @@ See `DEPLOY.md` for full Cloud Run + Cloud Scheduler setup.
 - Condition evaluator for price, RSI, HV rank, etc.
 - Pushover notification service
 - Cloud Scheduler internal endpoints (price checks, technical checks, reminders, expiry)
-- 61 tests passing
+- 86 tests passing
 - Production Dockerfile with multi-stage build
 - Cloud Build CI/CD configuration
 - Brutalist UI styling

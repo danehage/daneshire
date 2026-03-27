@@ -77,15 +77,17 @@ class AlertEngine:
         self,
         alert: Alert,
         market_data: dict,
-        send_notification: bool = True,
     ) -> Optional[AlertHistory]:
         """
         Evaluate a single alert and record the result.
 
+        Note: This method only evaluates the condition and records history.
+        Notifications are handled separately by the internal routes which
+        call send_alert_notification() after evaluation.
+
         Args:
             alert: The alert to evaluate
             market_data: Current market data for the ticker
-            send_notification: Whether to send notification if triggered
 
         Returns:
             AlertHistory record, or None if alert is not active
@@ -108,11 +110,6 @@ class AlertEngine:
             # Update alert status
             alert.status = "triggered"
             alert.triggered_at = datetime.now(timezone.utc)
-
-            if send_notification:
-                # TODO: Send notification via Pushover
-                history.notification_sent = True
-                history.notes = "Notification sent"
 
         self.db.add(history)
         await self.db.commit()
@@ -144,6 +141,8 @@ class AlertEngine:
                 continue
 
             history = await self.evaluate_alert(alert, ticker_data)
+            if history is None:
+                continue
             evaluated += 1
 
             if history.condition_met:
@@ -181,6 +180,8 @@ class AlertEngine:
                 continue
 
             history = await self.evaluate_alert(alert, ticker_data)
+            if history is None:
+                continue
             evaluated += 1
 
             if history.condition_met:

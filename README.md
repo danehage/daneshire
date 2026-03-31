@@ -2,7 +2,7 @@
 
 Stock research terminal for swing trading and options strategies. Single-user app with watchlist management, trade journaling, quantitative scanner, and price alerts with push notifications.
 
-**Live:** https://daneshire-152777997244.us-central1.run.app (HTTP Basic Auth required)
+**Live:** https://danecast-trades-152777997244.us-central1.run.app (HTTP Basic Auth required)
 
 ## Features
 
@@ -99,11 +99,11 @@ See [DEPLOY.md](DEPLOY.md) for full GCP deployment instructions.
 
 ```bash
 # Build and push
-gcloud builds submit --tag us-central1-docker.pkg.dev/PROJECT/danecast/daneshire
+gcloud builds submit --tag us-central1-docker.pkg.dev/PROJECT/danecast/danecast-trades
 
 # Deploy
-gcloud run deploy daneshire \
-  --image us-central1-docker.pkg.dev/PROJECT/danecast/daneshire \
+gcloud run deploy danecast-trades \
+  --image us-central1-docker.pkg.dev/PROJECT/danecast/danecast-trades \
   --region us-central1 \
   --allow-unauthenticated \
   --set-secrets "NEON_DATABASE_URL=neon-database-url:latest,AUTH_USERNAME=auth-username:latest,AUTH_PASSWORD=auth-password:latest,..."

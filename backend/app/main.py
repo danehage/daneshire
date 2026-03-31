@@ -1,16 +1,66 @@
+import base64
 import os
+import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.config import settings
 from app.database import get_db
+
+
+class BasicAuthMiddleware(BaseHTTPMiddleware):
+    """HTTP Basic Auth middleware for protecting the app."""
+
+    # Paths that don't require auth (health checks for Cloud Run)
+    PUBLIC_PATHS = {"/api/health", "/api/health/db"}
+    # Paths that use scheduler secret instead of basic auth
+    INTERNAL_PREFIX = "/api/internal/"
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+
+        # Skip auth for public health endpoints
+        if path in self.PUBLIC_PATHS:
+            return await call_next(request)
+
+        # Skip auth for internal endpoints (they use X-Scheduler-Secret)
+        if path.startswith(self.INTERNAL_PREFIX):
+            return await call_next(request)
+
+        # Skip if auth not configured (local development)
+        if not settings.auth_enabled:
+            return await call_next(request)
+
+        # Check Authorization header
+        auth_header = request.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Basic "):
+            try:
+                credentials = base64.b64decode(auth_header[6:]).decode("utf-8")
+                username, password = credentials.split(":", 1)
+
+                # Use secrets.compare_digest to prevent timing attacks
+                username_ok = secrets.compare_digest(username, settings.auth_username)
+                password_ok = secrets.compare_digest(password, settings.auth_password)
+
+                if username_ok and password_ok:
+                    return await call_next(request)
+            except (ValueError, UnicodeDecodeError):
+                pass
+
+        # Auth failed - return 401 with WWW-Authenticate header (triggers browser prompt)
+        return Response(
+            content="Authentication required",
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            headers={"WWW-Authenticate": 'Basic realm="Danecast Trades"'},
+        )
 
 # Static files directory (frontend build)
 STATIC_DIR = Path(__file__).parent.parent / "static"
@@ -38,6 +88,9 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+# Basic auth middleware (production security)
+app.add_middleware(BasicAuthMiddleware)
 
 # CORS: Only needed for local development (cross-origin requests from Vite dev server)
 # In production, frontend is served from same origin, so CORS is not needed

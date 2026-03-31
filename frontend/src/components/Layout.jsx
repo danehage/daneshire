@@ -46,21 +46,23 @@ export default function Layout({ children }) {
   return (
     <div className="min-h-screen bg-cream">
       <nav className="bg-warm-white border-b-2 border-ink">
-        <div className="max-w-6xl mx-auto px-6">
-          <div className="flex items-center justify-between h-16">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6">
+          {/* Mobile: stacked layout */}
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between py-3 sm:py-0 sm:h-16 gap-3 sm:gap-0">
             <Link
               to="/"
-              className="text-xl font-serif font-bold text-ink tracking-tight"
+              className="text-xl font-serif font-bold tracking-tight shrink-0"
             >
-              Danecast
+              <span className="text-accent">Dane</span>
+              <span className="text-ink">shire Hathaway</span>
             </Link>
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 sm:gap-4 overflow-x-auto">
               <div className="flex">
                 {navItems.map((item) => (
                   <Link
                     key={item.path}
                     to={item.path}
-                    className={`px-4 py-2 text-sm font-medium uppercase tracking-wide border-2 transition-all ${
+                    className={`px-3 sm:px-4 py-2 text-xs sm:text-sm font-medium uppercase tracking-wide border-2 transition-all whitespace-nowrap ${
                       location.pathname === item.path
                         ? "bg-warm-white border-ink text-ink"
                         : "border-transparent text-mid-brown hover:border-ink hover:text-ink"
@@ -75,7 +77,7 @@ export default function Layout({ children }) {
           </div>
         </div>
       </nav>
-      <main className="max-w-6xl mx-auto px-6 py-8">{children}</main>
+      <main className="max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-8">{children}</main>
     </div>
   );
 }

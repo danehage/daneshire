@@ -97,9 +97,9 @@ class StockScanner:
             return {
                 "ticker": ticker,
                 "price": current_price,
-                "market_cap": quote.get("marketCap", 0),
-                "volume": current_volume,
-                "avg_volume": avg_volume or 0,
+                "market_cap": int(quote.get("marketCap", 0) or 0),
+                "volume": int(current_volume or 0),
+                "avg_volume": int(avg_volume or 0),
                 "volume_pace": volume_pace,
                 "volume_pace_reliable": is_market_hours,
                 "hv_rank": vol_data["rank"] if vol_data else None,

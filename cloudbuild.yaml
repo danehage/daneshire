@@ -41,7 +41,7 @@ steps:
       - '--set-env-vars'
       - 'ENVIRONMENT=production'
       - '--set-secrets'
-      - 'NEON_DATABASE_URL=neon-database-url:latest,FMP_API_KEY=fmp-api-key:latest,PUSHOVER_USER_KEY=pushover-user-key:latest,PUSHOVER_API_TOKEN=pushover-api-token:latest,SCHEDULER_SECRET=scheduler-secret:latest'
+      - 'NEON_DATABASE_URL=neon-database-url:latest,FMP_API_KEY=fmp-api-key:latest,PUSHOVER_USER_KEY=pushover-user-key:latest,PUSHOVER_API_TOKEN=pushover-api-token:latest,SCHEDULER_SECRET=scheduler-secret:latest,AUTH_USERNAME=auth-username:latest,AUTH_PASSWORD=auth-password:latest'
       - '--min-instances'
       - '0'
       - '--max-instances'

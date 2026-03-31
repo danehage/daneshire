@@ -36,11 +36,11 @@ function formatDate(dateString) {
 
 function SummaryCard({ title, value, subtitle, linkTo, linkLabel }) {
   return (
-    <div className="border-2 border-ink shadow-hard bg-warm-white p-6">
+    <div className="border-2 border-ink shadow-hard-sm sm:shadow-hard bg-warm-white p-4 sm:p-6">
       <h3 className="text-xs font-medium uppercase tracking-wide text-dark-brown mb-2">
         {title}
       </h3>
-      <p className="text-4xl font-serif font-bold text-ink mb-1">{value}</p>
+      <p className="text-3xl sm:text-4xl font-serif font-bold text-ink mb-1">{value}</p>
       {subtitle && <p className="text-sm text-mid-brown">{subtitle}</p>}
       {linkTo && (
         <Link
@@ -134,14 +134,14 @@ function JournalSearch() {
 
   return (
     <div className="relative" ref={containerRef}>
-      <div className="border-2 border-ink shadow-hard bg-warm-white">
+      <div className="border-2 border-ink shadow-hard-sm sm:shadow-hard bg-warm-white">
         <input
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder="Search journal entries..."
-          className="w-full px-4 py-3 bg-transparent text-ink placeholder-light-brown focus:outline-none"
+          className="w-full px-3 sm:px-4 py-2 sm:py-3 text-sm sm:text-base bg-transparent text-ink placeholder-light-brown focus:outline-none"
         />
       </div>
 
@@ -235,14 +235,17 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-8">
-      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+      <div className="flex flex-col gap-4">
         <div>
-          <h1 className="font-serif text-4xl text-ink mb-2">Danecast Trades</h1>
-          <p className="text-mid-brown">
+          <h1 className="font-serif text-3xl sm:text-4xl mb-2">
+            <span className="text-accent">Dane</span>
+            <span className="text-ink">shire Hathaway</span>
+          </h1>
+          <p className="text-mid-brown text-sm sm:text-base">
             Stock research terminal for swing trading and options strategies.
           </p>
         </div>
-        <div className="w-full md:w-80">
+        <div className="w-full max-w-md">
           <JournalSearch />
         </div>
       </div>

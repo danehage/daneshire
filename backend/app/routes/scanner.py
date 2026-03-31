@@ -52,12 +52,17 @@ async def list_universes():
 async def execute_scan(request: ScanRequest):
     """
     Start a new scan. Returns scan_id to use for streaming progress.
+    In Cloud Run, we run the scan synchronously to avoid background task issues.
     """
     tickers = get_universe(request.universe)
     if not tickers:
         raise HTTPException(status_code=400, detail=f"Unknown universe: {request.universe}")
 
     scanner = StockScanner()
+
+    # Generate scan_id upfront
+    import uuid
+    temp_scan_id = str(uuid.uuid4())
 
     # Initialize scan state
     scan_state = {
@@ -67,8 +72,10 @@ async def execute_scan(request: ScanRequest):
         "started_at": datetime.utcnow(),
         "progress": {"current": 0, "total": 0, "found": 0},
         "results": [],
-        "scan_id": None,
+        "scan_id": temp_scan_id,
+        "temp_id": temp_scan_id,
     }
+    _active_scans[temp_scan_id] = scan_state
 
     async def progress_callback(event: dict):
         """Update scan state with progress."""
@@ -81,37 +88,26 @@ async def execute_scan(request: ScanRequest):
         elif event["type"] == "complete":
             scan_state["status"] = "complete"
 
-    # Run scan in background task
-    async def run_scan():
-        try:
-            scan_id, results = await scanner.run_scan(
-                tickers,
-                progress_callback=progress_callback,
-                use_cache=request.use_cache,
-            )
-            scan_state["scan_id"] = scan_id
-            scan_state["results"] = results
-            scan_state["status"] = "complete"
-            scan_state["completed_at"] = datetime.utcnow()
-        except Exception as e:
-            logger.error(f"Scan failed: {e}")
-            scan_state["status"] = "error"
-            scan_state["error"] = str(e)
-
-    # Start the scan task
-    task = asyncio.create_task(run_scan())
-
-    # Generate a temporary scan_id for tracking
-    import uuid
-    temp_scan_id = str(uuid.uuid4())
-    scan_state["temp_id"] = temp_scan_id
-    _active_scans[temp_scan_id] = scan_state
+    # Run scan synchronously (await completion)
+    try:
+        scan_id, results = await scanner.run_scan(
+            tickers,
+            progress_callback=progress_callback,
+            use_cache=request.use_cache,
+        )
+        scan_state["results"] = results
+        scan_state["status"] = "complete"
+        scan_state["completed_at"] = datetime.utcnow()
+    except Exception as e:
+        logger.error(f"Scan failed: {e}")
+        scan_state["status"] = "error"
+        scan_state["error"] = str(e)
 
     return ScanExecuteResponse(
         scan_id=temp_scan_id,
         universe=request.universe,
         universe_size=len(tickers),
-        message="Scan started. Use /stream endpoint for progress.",
+        message=f"Scan complete. Found {len(scan_state['results'])} opportunities.",
     )
 
 

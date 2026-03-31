@@ -21,8 +21,16 @@ class Settings(BaseSettings):
     # Internal auth
     scheduler_secret: str = ""
 
+    # Basic auth for web access
+    auth_username: str = ""
+    auth_password: str = ""
+
     # Environment
     environment: str = "development"
+
+    @property
+    def auth_enabled(self) -> bool:
+        return bool(self.auth_username and self.auth_password)
 
     @property
     def is_production(self) -> bool:

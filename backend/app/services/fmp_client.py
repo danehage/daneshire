@@ -46,44 +46,50 @@ class FMPClient:
             return None
 
     async def get_batch_quotes(
-        self, tickers: list[str], batch_size: int = 50
+        self, tickers: list[str], max_concurrent: int = 10
     ) -> dict[str, dict]:
         """
-        Fetch quotes for multiple tickers using FMP's bulk endpoint.
+        Fetch quotes for multiple tickers using parallel individual requests.
         Returns dict mapping ticker -> quote data.
         """
         all_quotes = {}
         total = len(tickers)
+        completed = 0
 
         logger.info(f"Fetching quotes for {total} stocks...")
 
-        # FMP allows comma-separated symbols in bulk requests
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            for i in range(0, total, batch_size):
-                batch = tickers[i : i + batch_size]
-                symbols = ",".join(batch)
+        semaphore = asyncio.Semaphore(max_concurrent)
 
+        async def fetch_one(ticker: str, client: httpx.AsyncClient):
+            nonlocal completed
+            async with semaphore:
                 try:
-                    url = f"{self.BASE_URL}/stable/quote?symbol={symbols}&apikey={self.api_key}"
+                    url = f"{self.BASE_URL}/stable/quote?symbol={ticker}&apikey={self.api_key}"
                     response = await client.get(url)
 
                     if response.status_code == 200:
                         data = response.json()
-                        if isinstance(data, list):
-                            for quote in data:
-                                symbol = quote.get("symbol")
-                                if symbol:
-                                    all_quotes[symbol] = quote
+                        if isinstance(data, list) and len(data) > 0:
+                            all_quotes[ticker] = data[0]
+                        elif isinstance(data, dict) and data:
+                            all_quotes[ticker] = data
 
                     elif response.status_code == 429:
-                        logger.warning("Rate limited, waiting...")
-                        await asyncio.sleep(1)
-                        continue
+                        logger.warning(f"Rate limited on {ticker}")
+                        await asyncio.sleep(0.5)
 
                 except httpx.RequestError as e:
-                    logger.debug(f"Batch request error: {e}")
+                    logger.debug(f"Error fetching {ticker}: {e}")
 
-                logger.info(f"Progress: {min(i + batch_size, total)}/{total}")
+                completed += 1
+                if completed % 20 == 0:
+                    logger.info(f"Quote progress: {completed}/{total}")
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            await asyncio.gather(
+                *[fetch_one(ticker, client) for ticker in tickers],
+                return_exceptions=True,
+            )
 
         logger.info(f"Completed: {len(all_quotes)} quotes collected")
         return all_quotes

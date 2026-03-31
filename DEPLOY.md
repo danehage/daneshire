@@ -37,6 +37,15 @@ echo -n "your-pushover-app-token" | \
 gcloud secrets create scheduler-secret --replication-policy="automatic"
 echo -n "$(openssl rand -hex 32)" | \
   gcloud secrets versions add scheduler-secret --data-file=-
+
+# Basic auth credentials (protects web access)
+gcloud secrets create auth-username --replication-policy="automatic"
+echo -n "your-chosen-username" | \
+  gcloud secrets versions add auth-username --data-file=-
+
+gcloud secrets create auth-password --replication-policy="automatic"
+echo -n "your-secure-password" | \
+  gcloud secrets versions add auth-password --data-file=-
 ```
 
 ---
@@ -61,10 +70,15 @@ gcloud run deploy danecast-trades \
   --set-secrets "PUSHOVER_USER_KEY=pushover-user-key:latest" \
   --set-secrets "PUSHOVER_API_TOKEN=pushover-api-token:latest" \
   --set-secrets "SCHEDULER_SECRET=scheduler-secret:latest" \
+  --set-secrets "AUTH_USERNAME=auth-username:latest" \
+  --set-secrets "AUTH_PASSWORD=auth-password:latest" \
   --min-instances 0 \
   --max-instances 1 \
   --memory 512Mi \
   --cpu 1
+
+# Note: --allow-unauthenticated is still needed for the app to be reachable.
+# The app itself enforces Basic HTTP Auth for all routes except health checks.
 ```
 
 ### Option B: Cloud Build (CI/CD)
@@ -199,6 +213,8 @@ curl -X POST ${SERVICE_URL}/api/internal/health \
 | `PUSHOVER_USER_KEY` | Pushover user key for notifications | Yes |
 | `PUSHOVER_API_TOKEN` | Pushover app token | Yes |
 | `SCHEDULER_SECRET` | Secret for internal endpoints | Yes |
+| `AUTH_USERNAME` | Basic auth username for web access | Yes (prod) |
+| `AUTH_PASSWORD` | Basic auth password for web access | Yes (prod) |
 | `ENVIRONMENT` | `development` or `production` | No (default: development) |
 | `PORT` | Server port (Cloud Run sets this) | No (default: 8080) |
 

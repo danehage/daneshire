@@ -1,8 +1,8 @@
-# Danecast Trades
+# Daneshire Hathaway
 
 Stock research terminal for swing trading and options strategies. Single-user app with watchlist management, trade journaling, quantitative scanner, and price alerts with push notifications.
 
-**Live:** https://danecast-trades-152777997244.us-central1.run.app
+**Live:** https://daneshire-152777997244.us-central1.run.app (HTTP Basic Auth required)
 
 ## Features
 
@@ -57,6 +57,9 @@ PUSHOVER_USER_KEY=your_user_key
 PUSHOVER_API_TOKEN=your_app_token
 SCHEDULER_SECRET=any_random_string
 ENVIRONMENT=development
+# Auth disabled in development; set these for local testing:
+# AUTH_USERNAME=your_username
+# AUTH_PASSWORD=your_password
 EOF
 
 # Run migrations
@@ -82,7 +85,7 @@ cd backend
 pytest tests/ -v
 ```
 
-61 tests covering:
+86 tests covering:
 - Watchlist CRUD
 - Alerts API
 - Condition evaluator (28 tests)
@@ -96,15 +99,17 @@ See [DEPLOY.md](DEPLOY.md) for full GCP deployment instructions.
 
 ```bash
 # Build and push
-gcloud builds submit --tag us-central1-docker.pkg.dev/PROJECT/danecast/danecast-trades
+gcloud builds submit --tag us-central1-docker.pkg.dev/PROJECT/danecast/daneshire
 
 # Deploy
-gcloud run deploy danecast-trades \
-  --image us-central1-docker.pkg.dev/PROJECT/danecast/danecast-trades \
+gcloud run deploy daneshire \
+  --image us-central1-docker.pkg.dev/PROJECT/danecast/daneshire \
   --region us-central1 \
   --allow-unauthenticated \
-  --set-secrets "NEON_DATABASE_URL=neon-database-url:latest,..."
+  --set-secrets "NEON_DATABASE_URL=neon-database-url:latest,AUTH_USERNAME=auth-username:latest,AUTH_PASSWORD=auth-password:latest,..."
 ```
+
+Production requires HTTP Basic Auth credentials (configured via `AUTH_USERNAME` and `AUTH_PASSWORD` secrets).
 
 ## Project Structure
 

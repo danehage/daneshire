@@ -1,6 +1,8 @@
 import base64
 import os
 import secrets
+import time
+from collections import defaultdict
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -20,14 +22,36 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
     """HTTP Basic Auth middleware for protecting the app."""
 
     # Paths that don't require auth (health checks for Cloud Run)
-    PUBLIC_PATHS = {"/api/health", "/api/health/db"}
+    PUBLIC_PATHS = {"/api/health"}
     # Paths that use scheduler secret instead of basic auth
     INTERNAL_PREFIX = "/api/internal/"
+
+    # Rate limiting: max failed attempts per IP before lockout
+    MAX_FAILED_ATTEMPTS = 5
+    LOCKOUT_SECONDS = 300  # 5 minutes
+
+    def __init__(self, app):
+        super().__init__(app)
+        # Track failed attempts: {ip: [(timestamp, ...), ...]}
+        self._failed_attempts: dict[str, list[float]] = defaultdict(list)
+
+    def _is_rate_limited(self, client_ip: str) -> bool:
+        """Check if an IP is locked out due to too many failed attempts."""
+        now = time.monotonic()
+        # Remove expired entries
+        self._failed_attempts[client_ip] = [
+            t for t in self._failed_attempts[client_ip]
+            if now - t < self.LOCKOUT_SECONDS
+        ]
+        return len(self._failed_attempts[client_ip]) >= self.MAX_FAILED_ATTEMPTS
+
+    def _record_failure(self, client_ip: str):
+        self._failed_attempts[client_ip].append(time.monotonic())
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
 
-        # Skip auth for public health endpoints
+        # Skip auth for public health endpoint
         if path in self.PUBLIC_PATHS:
             return await call_next(request)
 
@@ -38,6 +62,16 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
         # Skip if auth not configured (local development)
         if not settings.auth_enabled:
             return await call_next(request)
+
+        client_ip = request.client.host if request.client else "unknown"
+
+        # Check rate limit before processing credentials
+        if self._is_rate_limited(client_ip):
+            return Response(
+                content="Too many failed attempts. Try again later.",
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                headers={"Retry-After": str(self.LOCKOUT_SECONDS)},
+            )
 
         # Check Authorization header
         auth_header = request.headers.get("Authorization")
@@ -55,7 +89,8 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
             except (ValueError, UnicodeDecodeError):
                 pass
 
-        # Auth failed - return 401 with WWW-Authenticate header (triggers browser prompt)
+        # Auth failed - record and return 401
+        self._record_failure(client_ip)
         return Response(
             content="Authentication required",
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -119,8 +154,9 @@ async def health_check():
 
 @app.get("/api/health/db")
 async def health_check_db(db: AsyncSession = Depends(get_db)):
+    """Database health check. Protected by basic auth (not in PUBLIC_PATHS)."""
     result = await db.execute(text("SELECT 1"))
-    return {"status": "ok", "database": "connected", "result": result.scalar()}
+    return {"status": "ok", "database": "connected"}
 
 
 # Serve static frontend in production

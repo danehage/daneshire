@@ -229,6 +229,7 @@ class StockScanner:
         tickers: list[str],
         progress_callback: Optional[Callable[[dict], Any]] = None,
         use_cache: bool = True,
+        universe: str = "custom",
     ) -> tuple[str, list[dict]]:
         """
         Run a full scan on the given ticker list.
@@ -241,20 +242,22 @@ class StockScanner:
             tickers: List of ticker symbols to scan
             progress_callback: Optional async callback for progress updates
             use_cache: Whether to use cached Stage 1 data
+            universe: Universe name for cache key
 
         Returns:
             tuple: (scan_id, list of analyzed stocks sorted by score)
         """
         scan_id = str(uuid4())
+        cache_key = f"stage1_{universe}"
 
         # Stage 1: Fast filter
         survivors = {}
 
         if use_cache:
-            cache_data = self._load_cache("stage1_quotes")
+            cache_data = self._load_cache(cache_key)
             if cache_data:
                 survivors = cache_data
-                logger.info(f"Loaded {len(survivors)} stocks from cache")
+                logger.info(f"Loaded {len(survivors)} stocks from {universe} cache")
 
         if not survivors:
             logger.info(f"Fetching quotes for {len(tickers)} stocks...")
@@ -272,7 +275,7 @@ class StockScanner:
                     survivors[ticker] = quote
 
             logger.info(f"{len(survivors)} stocks passed Stage 1 filters")
-            self._save_cache("stage1_quotes", survivors)
+            self._save_cache(cache_key, survivors)
 
         if not survivors:
             logger.error("No stocks passed Stage 1 filters")

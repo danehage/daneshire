@@ -149,6 +149,32 @@ class FMPClient:
         await asyncio.gather(*[fetch_one(t) for t in tickers], return_exceptions=True)
         return results
 
+    async def get_sp500_constituents(self) -> list[str]:
+        """
+        Fetch current S&P 500 constituent symbols from FMP.
+        Returns list of ticker symbols.
+        """
+        try:
+            url = f"{self.BASE_URL}/api/v3/sp500_constituent?apikey={self.api_key}"
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.get(url)
+
+                if response.status_code == 200:
+                    data = response.json()
+                    if isinstance(data, list):
+                        tickers = [item.get("symbol") for item in data if item.get("symbol")]
+                        logger.info(f"Fetched {len(tickers)} S&P 500 constituents from FMP")
+                        return tickers
+
+                elif response.status_code == 429:
+                    logger.warning("Rate limited fetching S&P 500 constituents")
+
+                return []
+
+        except httpx.RequestError as e:
+            logger.error(f"Error fetching S&P 500 constituents: {e}")
+            return []
+
     async def get_earnings_date(self, ticker: str) -> Optional[dict]:
         """
         Fetch upcoming earnings date for a ticker.

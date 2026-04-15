@@ -19,6 +19,7 @@ from app.schemas.scan import (
     UniverseInfo,
 )
 from app.services import StockScanner, UNIVERSES, get_universe
+from app.services.fmp_client import FMPClient
 
 logger = logging.getLogger(__name__)
 
@@ -35,17 +36,19 @@ async def list_universes():
         "quick": "High volume, popular stocks for fast daily screening",
         "robinhood": "Most popular retail trading stocks",
         "sp500_sample": "100 representative large cap S&P 500 stocks",
-        "sp500": "Full S&P 500 components (~500 stocks)",
+        "sp500": "Current S&P 500 constituents (fetched live from FMP)",
     }
 
-    return [
-        UniverseInfo(
+    result = []
+    for name, tickers in UNIVERSES.items():
+        # sp500 fetches dynamically, show ~500 as estimate
+        size = 503 if name == "sp500" else len(tickers)
+        result.append(UniverseInfo(
             name=name,
-            size=len(tickers),
+            size=size,
             description=descriptions.get(name, ""),
-        )
-        for name, tickers in UNIVERSES.items()
-    ]
+        ))
+    return result
 
 
 @router.post("/execute", response_model=ScanExecuteResponse)
@@ -54,7 +57,17 @@ async def execute_scan(request: ScanRequest):
     Start a new scan. Returns scan_id to use for streaming progress.
     In Cloud Run, we run the scan synchronously to avoid background task issues.
     """
-    tickers = get_universe(request.universe)
+    # For sp500, fetch current constituents dynamically from FMP
+    if request.universe == "sp500":
+        fmp = FMPClient()
+        tickers = await fmp.get_sp500_constituents()
+        if not tickers:
+            # Fallback to hardcoded list if API fails
+            tickers = get_universe("sp500")
+            logger.warning("FMP S&P 500 fetch failed, using hardcoded list")
+    else:
+        tickers = get_universe(request.universe)
+
     if not tickers:
         raise HTTPException(status_code=400, detail=f"Unknown universe: {request.universe}")
 
@@ -94,6 +107,7 @@ async def execute_scan(request: ScanRequest):
             tickers,
             progress_callback=progress_callback,
             use_cache=request.use_cache,
+            universe=request.universe,
         )
         scan_state["results"] = results
         scan_state["status"] = "complete"

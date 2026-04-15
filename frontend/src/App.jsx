@@ -5,6 +5,7 @@ import WatchlistPage from "./pages/WatchlistPage";
 import ScannerPage from "./pages/ScannerPage";
 import TickerDetailPage from "./pages/TickerDetailPage";
 import AlertsPage from "./pages/AlertsPage";
+import JournalPage from "./pages/JournalPage";
 
 function App() {
   return (
@@ -16,6 +17,7 @@ function App() {
           <Route path="/scanner" element={<ScannerPage />} />
           <Route path="/ticker/:symbol" element={<TickerDetailPage />} />
           <Route path="/alerts" element={<AlertsPage />} />
+          <Route path="/journal" element={<JournalPage />} />
         </Routes>
       </Layout>
     </BrowserRouter>

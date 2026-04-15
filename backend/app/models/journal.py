@@ -25,10 +25,16 @@ class JournalEntry(Base):
         primary_key=True,
         server_default=text("gen_random_uuid()"),
     )
-    watchlist_id: Mapped[UUID] = mapped_column(
+    watchlist_id: Mapped[Optional[UUID]] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("watchlist_items.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
+    )
+    ticker: Mapped[Optional[str]] = mapped_column(
+        String(10), nullable=True
+    )
+    title: Mapped[Optional[str]] = mapped_column(
+        String(200), nullable=True
     )
     entry_type: Mapped[str] = mapped_column(
         String(20), nullable=False, server_default="note"
@@ -49,6 +55,11 @@ class JournalEntry(Base):
             "entry_type IN ('thesis', 'note', 'entry', 'exit', 'adjustment', 'review')",
             name="valid_entry_type",
         ),
+        CheckConstraint(
+            "watchlist_id IS NOT NULL OR ticker IS NOT NULL",
+            name="journal_requires_ticker_or_watchlist",
+        ),
         Index("idx_journal_watchlist", "watchlist_id"),
         Index("idx_journal_type", "entry_type"),
+        Index("idx_journal_ticker", "ticker"),
     )

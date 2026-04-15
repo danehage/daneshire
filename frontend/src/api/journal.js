@@ -40,3 +40,22 @@ export async function searchJournal(query, entryType = null, limit = 50) {
   if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`);
   return res.json();
 }
+
+export async function getAllJournalEntries(ticker = null, entryType = null, limit = 100) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (ticker) params.append("ticker", ticker);
+  if (entryType) params.append("entry_type", entryType);
+  const res = await fetch(`${API_BASE}/api/journal?${params}`);
+  if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`);
+  return res.json();
+}
+
+export async function createStandaloneJournalEntry(data) {
+  const res = await fetch(`${API_BASE}/api/journal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`);
+  return res.json();
+}

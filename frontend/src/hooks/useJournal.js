@@ -5,6 +5,8 @@ import {
   updateJournalEntry,
   deleteJournalEntry,
   searchJournal,
+  getAllJournalEntries,
+  createStandaloneJournalEntry,
 } from "../api/journal";
 
 export function useJournalEntries(watchlistId) {
@@ -37,8 +39,15 @@ export function useDeleteJournalEntry(watchlistId) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (entryId) => deleteJournalEntry(entryId),
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: ["journal", watchlistId] }),
+    onSuccess: () => {
+      // Invalidate specific watchlist journal if provided
+      if (watchlistId) {
+        queryClient.invalidateQueries({ queryKey: ["journal", watchlistId] });
+      }
+      // Always invalidate all-journal and search queries
+      queryClient.invalidateQueries({ queryKey: ["journal-all"] });
+      queryClient.invalidateQueries({ queryKey: ["journal-search"] });
+    },
   });
 }
 
@@ -48,5 +57,23 @@ export function useJournalSearch(query, entryType = null) {
     queryFn: () => searchJournal(query, entryType),
     enabled: query?.length >= 2,
     staleTime: 30000, // Cache results for 30 seconds
+  });
+}
+
+export function useAllJournalEntries(ticker = null, entryType = null) {
+  return useQuery({
+    queryKey: ["journal-all", ticker, entryType],
+    queryFn: () => getAllJournalEntries(ticker, entryType),
+  });
+}
+
+export function useCreateStandaloneJournalEntry() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: createStandaloneJournalEntry,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["journal-all"] });
+      queryClient.invalidateQueries({ queryKey: ["journal-search"] });
+    },
   });
 }

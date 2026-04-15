@@ -94,6 +94,9 @@ class StockScanner:
                 current_price, current_volume, df
             )
 
+            # Fetch earnings date
+            earnings = await self.client.get_earnings_date(ticker)
+
             return {
                 "ticker": ticker,
                 "price": current_price,
@@ -118,6 +121,8 @@ class StockScanner:
                 "volume_ratio": momentum["volume_ratio"],
                 "rsi": momentum["rsi"],
                 "momentum_10d": momentum["momentum_10d"],
+                "earnings_date": earnings["date"] if earnings else None,
+                "days_to_earnings": earnings["days_until"] if earnings else None,
             }
 
         except Exception as e:
@@ -205,6 +210,17 @@ class StockScanner:
         elif market_cap > 10_000_000_000:
             score += 5
             signals.append("Large cap")
+
+        # Earnings proximity warning (informational, affects options risk)
+        days_to_earnings = result.get("days_to_earnings")
+        if days_to_earnings is not None:
+            earnings_date = result.get("earnings_date", "")
+            if days_to_earnings <= 7:
+                signals.append(f"Earnings in {days_to_earnings}d ({earnings_date}) - HIGH IV")
+            elif days_to_earnings <= 14:
+                signals.append(f"Earnings in {days_to_earnings}d ({earnings_date})")
+            elif days_to_earnings <= 30:
+                signals.append(f"Earnings {earnings_date}")
 
         return score, signals
 

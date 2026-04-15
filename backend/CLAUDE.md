@@ -10,11 +10,11 @@ FastAPI backend serving the React frontend. All routes under `/api/`. Async SQLA
 
 ```python
 # Always use this pattern for routes:
-from app.database import get_session
+from app.database import get_db
 
 @router.get("/api/watchlist")
-async def list_watchlist(session: AsyncSession = Depends(get_session)):
-    result = await session.execute(select(WatchlistItem).order_by(WatchlistItem.sort_order))
+async def list_watchlist(db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(WatchlistItem).order_by(WatchlistItem.sort_order))
     return result.scalars().all()
 ```
 

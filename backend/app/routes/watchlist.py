@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
@@ -94,7 +94,7 @@ async def update_watchlist_item(
         update_data["ticker"] = update_data["ticker"].upper()
 
     if update_data:
-        update_data["updated_at"] = datetime.now()
+        update_data["updated_at"] = datetime.now(timezone.utc)
         for key, value in update_data.items():
             setattr(item, key, value)
         await db.commit()
@@ -130,6 +130,6 @@ async def reorder_watchlist(
         await db.execute(
             update(WatchlistItem)
             .where(WatchlistItem.id == item_id)
-            .values(sort_order=index, updated_at=datetime.now())
+            .values(sort_order=index, updated_at=datetime.now(timezone.utc))
         )
     await db.commit()

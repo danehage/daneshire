@@ -4,6 +4,7 @@ Financial Modeling Prep (FMP) API Client - Async version
 
 import asyncio
 import logging
+from datetime import datetime, date
 from typing import Optional
 
 import httpx
@@ -147,3 +148,44 @@ class FMPClient:
 
         await asyncio.gather(*[fetch_one(t) for t in tickers], return_exceptions=True)
         return results
+
+    async def get_earnings_date(self, ticker: str) -> Optional[dict]:
+        """
+        Fetch upcoming earnings date for a ticker.
+        Returns dict with 'date' and 'days_until' or None if not found.
+        """
+        try:
+            url = f"{self.BASE_URL}/api/v3/earning_calendar?symbol={ticker}&apikey={self.api_key}"
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                response = await client.get(url)
+
+                if response.status_code == 200:
+                    data = response.json()
+                    if isinstance(data, list) and len(data) > 0:
+                        today = date.today()
+                        # Find the next upcoming earnings date
+                        for entry in data:
+                            earnings_date_str = entry.get("date")
+                            if earnings_date_str:
+                                try:
+                                    earnings_date = datetime.strptime(
+                                        earnings_date_str, "%Y-%m-%d"
+                                    ).date()
+                                    days_until = (earnings_date - today).days
+                                    # Return if earnings is upcoming (within 60 days)
+                                    if days_until >= 0:
+                                        return {
+                                            "date": earnings_date_str,
+                                            "days_until": days_until,
+                                        }
+                                except ValueError:
+                                    continue
+
+                elif response.status_code == 429:
+                    logger.warning(f"Rate limited on earnings for {ticker}")
+
+                return None
+
+        except httpx.RequestError as e:
+            logger.debug(f"Error fetching earnings for {ticker}: {e}")
+            return None

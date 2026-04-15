@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useState, useDeferredValue } from "react";
 import ReactMarkdown from "react-markdown";
 import {
-  useJournalEntries,
-  useCreateJournalEntry,
+  useAllJournalEntries,
+  useCreateStandaloneJournalEntry,
   useDeleteJournalEntry,
 } from "../hooks/useJournal";
 
@@ -24,24 +24,27 @@ const TYPE_COLORS = {
   review: "bg-light-brown text-warm-white",
 };
 
-function AddEntryForm({ watchlistId, onClose }) {
+function AddStandaloneEntryForm({ onClose }) {
+  const [ticker, setTicker] = useState("");
   const [entryType, setEntryType] = useState("note");
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
-  const createEntry = useCreateJournalEntry(watchlistId);
+  const createEntry = useCreateStandaloneJournalEntry();
 
   const handleSubmit = (e) => {
     e.preventDefault();
-    if (!content.trim()) return;
+    if (!ticker.trim() || !content.trim()) return;
 
     createEntry.mutate(
       {
+        ticker: ticker.trim().toUpperCase(),
         entry_type: entryType,
         title: title.trim() || null,
         content: content.trim(),
       },
       {
         onSuccess: () => {
+          setTicker("");
           setTitle("");
           setContent("");
           onClose();
@@ -51,12 +54,21 @@ function AddEntryForm({ watchlistId, onClose }) {
   };
 
   return (
-    <form onSubmit={handleSubmit} className="mt-3 space-y-3">
+    <form onSubmit={handleSubmit} className="p-4 bg-warm-white border-2 border-ink space-y-3">
       <div className="flex gap-2">
+        <input
+          type="text"
+          value={ticker}
+          onChange={(e) => setTicker(e.target.value.toUpperCase())}
+          placeholder="TICKER"
+          className="w-24 px-3 py-2 border-2 border-ink bg-cream text-sm font-mono uppercase"
+          maxLength={10}
+          required
+        />
         <select
           value={entryType}
           onChange={(e) => setEntryType(e.target.value)}
-          className="px-3 py-2 border-2 border-ink bg-warm-white text-sm"
+          className="px-3 py-2 border-2 border-ink bg-cream text-sm"
         >
           {ENTRY_TYPES.map((type) => (
             <option key={type.value} value={type.value}>
@@ -69,20 +81,21 @@ function AddEntryForm({ watchlistId, onClose }) {
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           placeholder="Title (optional)"
-          className="flex-1 px-3 py-2 border-2 border-ink bg-warm-white text-sm"
+          className="flex-1 px-3 py-2 border-2 border-ink bg-cream text-sm"
         />
       </div>
       <textarea
         value={content}
         onChange={(e) => setContent(e.target.value)}
         placeholder="Write your notes here... (supports Markdown)"
-        rows={6}
-        className="w-full px-3 py-2 border-2 border-ink bg-warm-white text-sm font-serif resize-y"
+        rows={8}
+        className="w-full px-3 py-2 border-2 border-ink bg-cream text-sm font-serif resize-y"
+        required
       />
       <div className="flex gap-2">
         <button
           type="submit"
-          disabled={createEntry.isPending || !content.trim()}
+          disabled={createEntry.isPending || !ticker.trim() || !content.trim()}
           className="px-4 py-2 bg-accent text-warm-white text-sm font-medium uppercase tracking-wide border-2 border-ink shadow-hard-sm hover:bg-accent-hover disabled:opacity-50"
         >
           {createEntry.isPending ? "Saving..." : "Save Entry"}
@@ -110,47 +123,81 @@ function formatDate(dateString) {
   });
 }
 
-export default function JournalEntries({ watchlistId }) {
+export default function JournalPage() {
   const [showForm, setShowForm] = useState(false);
-  const { data: entries, isLoading } = useJournalEntries(watchlistId);
-  const deleteEntry = useDeleteJournalEntry(watchlistId);
+  const [tickerFilter, setTickerFilter] = useState("");
+  const [typeFilter, setTypeFilter] = useState("");
 
-  if (isLoading) {
-    return <div className="text-sm text-mid-brown py-2">Loading journal...</div>;
-  }
+  // Debounce ticker filter to avoid excessive API calls
+  const deferredTickerFilter = useDeferredValue(tickerFilter);
+
+  const { data: entries, isLoading } = useAllJournalEntries(
+    deferredTickerFilter || null,
+    typeFilter || null
+  );
+
+  // For delete, we pass null since these may be standalone entries
+  const deleteEntry = useDeleteJournalEntry(null);
 
   return (
-    <div className="py-3">
-      <div className="flex items-center justify-between mb-2">
-        <h4 className="text-xs font-medium uppercase tracking-wide text-dark-brown">
-          Journal
-        </h4>
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-2xl font-serif font-bold text-ink">Journal</h1>
         {!showForm && (
           <button
             onClick={() => setShowForm(true)}
-            className="text-xs text-accent hover:text-accent-hover font-medium uppercase tracking-wide"
+            className="px-4 py-2 bg-accent text-warm-white text-sm font-medium uppercase tracking-wide border-2 border-ink shadow-hard-sm hover:bg-accent-hover"
           >
-            + Add Entry
+            + New Entry
           </button>
         )}
       </div>
 
       {showForm && (
-        <AddEntryForm
-          watchlistId={watchlistId}
-          onClose={() => setShowForm(false)}
-        />
+        <div className="mb-6">
+          <AddStandaloneEntryForm onClose={() => setShowForm(false)} />
+        </div>
       )}
 
-      {entries && entries.length > 0 ? (
-        <div className="space-y-3 mt-3">
+      <div className="flex gap-3 mb-4">
+        <input
+          type="text"
+          value={tickerFilter}
+          onChange={(e) => setTickerFilter(e.target.value.toUpperCase())}
+          placeholder="Filter by ticker..."
+          className="px-3 py-2 border-2 border-ink bg-warm-white text-sm w-32 font-mono uppercase"
+          maxLength={10}
+        />
+        <select
+          value={typeFilter}
+          onChange={(e) => setTypeFilter(e.target.value)}
+          className="px-3 py-2 border-2 border-ink bg-warm-white text-sm"
+        >
+          <option value="">All Types</option>
+          {ENTRY_TYPES.map((type) => (
+            <option key={type.value} value={type.value}>
+              {type.label}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {isLoading ? (
+        <div className="text-mid-brown">Loading journal entries...</div>
+      ) : entries && entries.length > 0 ? (
+        <div className="space-y-4">
           {entries.map((entry) => (
             <div
               key={entry.id}
-              className="py-3 px-4 bg-cream border border-light-brown"
+              className="py-4 px-5 bg-warm-white border-2 border-ink"
             >
-              <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-3">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-3 flex-wrap">
+                  {entry.ticker && (
+                    <span className="text-sm font-mono font-bold text-accent">
+                      {entry.ticker}
+                    </span>
+                  )}
                   <span
                     className={`text-xs px-2 py-0.5 border border-ink uppercase tracking-wide ${
                       TYPE_COLORS[entry.entry_type]
@@ -170,7 +217,7 @@ export default function JournalEntries({ watchlistId }) {
                 <button
                   onClick={() => deleteEntry.mutate(entry.id)}
                   disabled={deleteEntry.isPending}
-                  className="text-light-brown hover:text-error font-bold"
+                  className="text-light-brown hover:text-error font-bold text-xl"
                 >
                   ×
                 </button>
@@ -182,9 +229,17 @@ export default function JournalEntries({ watchlistId }) {
           ))}
         </div>
       ) : (
-        !showForm && (
-          <p className="text-sm text-light-brown italic">No journal entries yet</p>
-        )
+        <div className="text-mid-brown italic">
+          No journal entries found.{" "}
+          {!showForm && (
+            <button
+              onClick={() => setShowForm(true)}
+              className="text-accent hover:underline"
+            >
+              Create one?
+            </button>
+          )}
+        </div>
       )}
     </div>
   );

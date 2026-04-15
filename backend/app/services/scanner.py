@@ -282,11 +282,12 @@ class StockScanner:
             return scan_id, []
 
         # Stage 2: Deep analysis (parallel with semaphore)
+        # Use lower concurrency to avoid rate limits
         results = []
         total = len(survivors)
         completed = 0
         errors = 0
-        semaphore = asyncio.Semaphore(5)
+        semaphore = asyncio.Semaphore(3)  # Reduced from 5 to avoid rate limits
 
         logger.info(f"Starting Stage 2 analysis of {total} stocks...")
 
@@ -297,6 +298,8 @@ class StockScanner:
                     result = await self._process_ticker(ticker, quote)
                     if result:
                         results.append(result)
+                    else:
+                        errors += 1  # Track when we can't process a ticker
                 except Exception as e:
                     errors += 1
                     logger.debug(f"Exception processing {ticker}: {e}")
@@ -311,6 +314,7 @@ class StockScanner:
                             "current": completed,
                             "total": total,
                             "found": len(results),
+                            "errors": errors,
                         }
                     )
 
@@ -324,7 +328,13 @@ class StockScanner:
             return_exceptions=True,
         )
 
-        logger.info(f"Stage 2 complete - {len(results)} stocks analyzed")
+        logger.info(f"Stage 2 complete - {len(results)} stocks analyzed, {errors} errors")
+
+        # Warn if high error rate
+        if errors > 0 and total > 0:
+            error_rate = errors / total
+            if error_rate > 0.5:
+                logger.warning(f"High error rate: {error_rate:.0%} of stocks failed analysis (likely rate limiting)")
 
         if not results:
             logger.error("No stocks successfully analyzed in Stage 2")

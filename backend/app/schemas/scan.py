@@ -32,6 +32,7 @@ class ScanProgressEvent(BaseModel):
     current: Optional[int] = None
     total: Optional[int] = None
     found: Optional[int] = None
+    errors: Optional[int] = None  # Track failed analyses (rate limits, etc.)
     total_analyzed: Optional[int] = None
 
 
@@ -82,6 +83,8 @@ class ScanResultsResponse(BaseModel):
     total_analyzed: int
     results: list[ScanResultItem]
     scanned_at: datetime
+    errors: int = 0  # Number of stocks that failed analysis
+    warning: Optional[str] = None  # Warning message (e.g., rate limiting)
 
 
 # For historical scan storage (future: database models)

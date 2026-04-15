@@ -23,7 +23,7 @@ function UniverseSelector({ value, onChange, universes }) {
   );
 }
 
-function ProgressBar({ current, total, found }) {
+function ProgressBar({ current, total, found, errors }) {
   const percent = total > 0 ? Math.round((current / total) * 100) : 0;
 
   return (
@@ -31,6 +31,9 @@ function ProgressBar({ current, total, found }) {
       <div className="flex justify-between text-sm text-mid-brown">
         <span>
           Analyzing {current} of {total}
+          {errors > 0 && (
+            <span className="text-warning ml-2">({errors} errors)</span>
+          )}
         </span>
         <span>{found} opportunities found</span>
       </div>
@@ -362,6 +365,7 @@ export default function ScannerPage() {
             current={progress.current}
             total={progress.total}
             found={progress.found}
+            errors={progress.errors}
           />
         </div>
       )}
@@ -376,12 +380,24 @@ export default function ScannerPage() {
       {/* Results */}
       {results && !isScanning && (
         <div className="space-y-4">
+          {/* Warning banner if there were errors */}
+          {results.warning && (
+            <div className="border-2 border-warning bg-warning/10 p-4 text-warning">
+              <strong>Warning:</strong> {results.warning}
+            </div>
+          )}
+
           <div className="flex items-center justify-between">
             <h2 className="font-serif text-2xl text-ink">
               Results ({results.results.length} opportunities)
             </h2>
             <span className="text-sm text-mid-brown">
               Scanned {results.total_analyzed} stocks
+              {results.errors > 0 && (
+                <span className="text-warning ml-1">
+                  ({results.errors} failed)
+                </span>
+              )}
             </span>
           </div>
           <ResultsTable

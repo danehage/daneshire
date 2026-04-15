@@ -61,6 +61,7 @@ export function useScan() {
             current: data.current,
             total: data.total,
             found: data.found,
+            errors: data.errors || 0,
           });
         } else if (data.type === "complete") {
           setIsScanning(false);

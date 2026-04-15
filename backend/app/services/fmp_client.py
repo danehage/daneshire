@@ -3,7 +3,9 @@ Financial Modeling Prep (FMP) API Client - Async version
 """
 
 import asyncio
+import json
 import logging
+import os
 from datetime import datetime, date
 from typing import Optional
 
@@ -15,14 +17,98 @@ logger = logging.getLogger(__name__)
 
 
 class FMPClient:
-    """Async client for Financial Modeling Prep API."""
+    """Async client for Financial Modeling Prep API with rate limit handling."""
 
     BASE_URL = "https://financialmodelingprep.com"
 
-    def __init__(self, api_key: str = None):
+    # Rate limiting: FMP allows ~300/min on free tier, ~750/min on starter
+    # We'll be conservative with 200/min = ~3.3 req/sec
+    REQUESTS_PER_SECOND = 3.0
+    MAX_RETRIES = 3
+    RETRY_DELAY = 2.0  # seconds
+
+    def __init__(self, api_key: str = None, cache_dir: str = "scanner_cache"):
         self.api_key = api_key or settings.fmp_api_key
         if not self.api_key:
             raise ValueError("FMP_API_KEY not provided")
+
+        self.cache_dir = cache_dir
+        if not os.path.exists(cache_dir):
+            os.makedirs(cache_dir)
+
+        # Throttling: track last request time
+        self._last_request_time = 0.0
+        self._request_lock = asyncio.Lock()
+
+    async def _throttle(self):
+        """Ensure we don't exceed rate limits."""
+        async with self._request_lock:
+            now = asyncio.get_event_loop().time()
+            min_interval = 1.0 / self.REQUESTS_PER_SECOND
+            elapsed = now - self._last_request_time
+            if elapsed < min_interval:
+                await asyncio.sleep(min_interval - elapsed)
+            self._last_request_time = asyncio.get_event_loop().time()
+
+    async def _request_with_retry(
+        self, url: str, client: httpx.AsyncClient, retries: int = None
+    ) -> Optional[httpx.Response]:
+        """Make a request with throttling and retry on rate limit."""
+        retries = retries if retries is not None else self.MAX_RETRIES
+
+        for attempt in range(retries + 1):
+            await self._throttle()
+
+            try:
+                response = await client.get(url)
+
+                if response.status_code == 200:
+                    return response
+                elif response.status_code == 429:
+                    if attempt < retries:
+                        delay = self.RETRY_DELAY * (2 ** attempt)  # exponential backoff
+                        logger.warning(f"Rate limited, retrying in {delay}s (attempt {attempt + 1}/{retries})")
+                        await asyncio.sleep(delay)
+                    else:
+                        logger.error(f"Rate limited after {retries} retries")
+                        return None
+                else:
+                    logger.debug(f"Request failed with status {response.status_code}")
+                    return None
+
+            except httpx.RequestError as e:
+                logger.debug(f"Request error: {e}")
+                if attempt < retries:
+                    await asyncio.sleep(self.RETRY_DELAY)
+                else:
+                    return None
+
+        return None
+
+    def _get_hist_cache_path(self, ticker: str) -> str:
+        """Get path for today's historical data cache."""
+        today = datetime.now().strftime("%Y-%m-%d")
+        return os.path.join(self.cache_dir, f"hist_{ticker}_{today}.json")
+
+    def _load_hist_cache(self, ticker: str) -> Optional[list[dict]]:
+        """Load cached historical data if it exists for today."""
+        cache_path = self._get_hist_cache_path(ticker)
+        if os.path.exists(cache_path):
+            try:
+                with open(cache_path, "r") as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, IOError):
+                return None
+        return None
+
+    def _save_hist_cache(self, ticker: str, data: list[dict]):
+        """Save historical data to cache."""
+        cache_path = self._get_hist_cache_path(ticker)
+        try:
+            with open(cache_path, "w") as f:
+                json.dump(data, f)
+        except IOError as e:
+            logger.debug(f"Failed to cache {ticker} history: {e}")
 
     async def get_quote(self, ticker: str) -> Optional[dict]:
         """Fetch a single stock quote."""
@@ -96,36 +182,41 @@ class FMPClient:
         return all_quotes
 
     async def get_historical_data(
-        self, ticker: str, days: int = 252
+        self, ticker: str, days: int = 252, use_cache: bool = True
     ) -> Optional[list[dict]]:
         """
         Fetch historical price data for a ticker.
         Returns list of daily OHLCV data, oldest to newest.
+
+        Uses daily caching since historical data doesn't change intraday.
         """
+        # Check cache first
+        if use_cache:
+            cached = self._load_hist_cache(ticker)
+            if cached:
+                return cached[:days] if len(cached) > days else cached
+
         try:
             url = f"{self.BASE_URL}/stable/historical-price-eod/full?symbol={ticker}&apikey={self.api_key}"
             async with httpx.AsyncClient(timeout=15.0) as client:
-                response = await client.get(url)
+                response = await self._request_with_retry(url, client)
 
-                if response.status_code == 200:
+                if response and response.status_code == 200:
                     data = response.json()
+                    hist = None
 
                     # API returns list directly or wrapped in 'historical' key
                     if isinstance(data, list) and len(data) > 0:
-                        hist = data[:days]
-                        return list(reversed(hist))
+                        hist = list(reversed(data[:days]))
                     elif isinstance(data, dict) and "historical" in data:
-                        hist = data["historical"][:days]
-                        return list(reversed(hist))
+                        hist = list(reversed(data["historical"][:days]))
 
-                elif response.status_code == 429:
-                    logger.warning(f"Rate limited fetching {ticker} history")
+                    if hist:
+                        self._save_hist_cache(ticker, hist)
+                        return hist
 
                 return None
 
-        except httpx.RequestError as e:
-            logger.debug(f"Network error fetching historical data for {ticker}: {e}")
-            return None
         except (KeyError, ValueError) as e:
             logger.debug(f"Data parsing error for {ticker}: {e}")
             return None

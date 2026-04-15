@@ -70,8 +70,9 @@ async def execute_scan(request: ScanRequest):
         "universe": request.universe,
         "universe_size": len(tickers),
         "started_at": datetime.utcnow(),
-        "progress": {"current": 0, "total": 0, "found": 0},
+        "progress": {"current": 0, "total": 0, "found": 0, "errors": 0},
         "results": [],
+        "errors": 0,
         "scan_id": temp_scan_id,
         "temp_id": temp_scan_id,
     }
@@ -84,7 +85,9 @@ async def execute_scan(request: ScanRequest):
                 "current": event["current"],
                 "total": event["total"],
                 "found": event["found"],
+                "errors": event.get("errors", 0),
             }
+            scan_state["errors"] = event.get("errors", 0)
         elif event["type"] == "complete":
             scan_state["status"] = "complete"
 
@@ -187,12 +190,25 @@ async def get_scan_results(scan_id: str):
     if scan_state["status"] == "error":
         raise HTTPException(status_code=500, detail=scan_state.get("error", "Scan failed"))
 
+    errors = scan_state.get("errors", 0)
+    total = scan_state["progress"].get("total", 0)
+    warning = None
+
+    if errors > 0 and total > 0:
+        error_rate = errors / total
+        if error_rate > 0.5:
+            warning = f"High error rate: {errors}/{total} stocks failed analysis (likely API rate limiting). Try scanning a smaller universe or wait a few minutes."
+        elif error_rate > 0.1:
+            warning = f"{errors} stocks could not be analyzed (possible rate limiting)"
+
     return ScanResultsResponse(
         scan_id=scan_id,
         universe=scan_state["universe"],
         total_analyzed=len(scan_state["results"]),
         results=[ScanResultItem(**r) for r in scan_state["results"]],
         scanned_at=scan_state.get("completed_at", scan_state["started_at"]),
+        errors=errors,
+        warning=warning,
     )
 
 

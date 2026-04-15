@@ -6,6 +6,7 @@ They are secured with the X-Scheduler-Secret header.
 """
 
 import logging
+import secrets
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Optional
@@ -44,7 +45,7 @@ async def verify_scheduler_secret(
             return
         raise HTTPException(status_code=500, detail="Scheduler secret not configured")
 
-    if x_scheduler_secret != settings.scheduler_secret:
+    if not x_scheduler_secret or not secrets.compare_digest(x_scheduler_secret, settings.scheduler_secret):
         raise HTTPException(status_code=401, detail="Invalid scheduler secret")
 
 

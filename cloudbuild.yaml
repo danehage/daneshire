@@ -1,27 +1,31 @@
 # Cloud Build configuration for Danecast Trades
 # Builds and deploys to Cloud Run
 
+substitutions:
+  _REGION: us-central1
+  _REPO: danecast-trades
+
 steps:
   # Build the Docker image
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'build'
       - '-t'
-      - 'gcr.io/$PROJECT_ID/danecast-trades:$COMMIT_SHA'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/app:$COMMIT_SHA'
       - '-t'
-      - 'gcr.io/$PROJECT_ID/danecast-trades:latest'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/app:latest'
       - '.'
 
-  # Push to Container Registry
+  # Push to Artifact Registry
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'push'
-      - 'gcr.io/$PROJECT_ID/danecast-trades:$COMMIT_SHA'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/app:$COMMIT_SHA'
 
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'push'
-      - 'gcr.io/$PROJECT_ID/danecast-trades:latest'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/app:latest'
 
   # Deploy to Cloud Run
   # NOTE: Secrets must be created in Secret Manager first (see DEPLOY.md)
@@ -32,7 +36,7 @@ steps:
       - 'deploy'
       - 'danecast-trades'
       - '--image'
-      - 'gcr.io/$PROJECT_ID/danecast-trades:$COMMIT_SHA'
+      - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/app:$COMMIT_SHA'
       - '--region'
       - 'us-central1'
       - '--platform'
@@ -52,8 +56,8 @@ steps:
       - '1'
 
 images:
-  - 'gcr.io/$PROJECT_ID/danecast-trades:$COMMIT_SHA'
-  - 'gcr.io/$PROJECT_ID/danecast-trades:latest'
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/app:$COMMIT_SHA'
+  - '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPO}/app:latest'
 
 options:
   logging: CLOUD_LOGGING_ONLY

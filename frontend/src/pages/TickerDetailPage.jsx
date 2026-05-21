@@ -1,8 +1,7 @@
 import { useParams, Link } from "react-router-dom";
 import { useTickerAnalysis, useTickerWatchlistItem } from "../hooks/useTicker";
 import { useCreateWatchlistItem } from "../hooks/useWatchlist";
-import PriceTargets from "../components/PriceTargets";
-import JournalEntries from "../components/JournalEntries";
+import TargetsAndJournal from "../components/TargetsAndJournal";
 
 function SignalBadge({ signal }) {
   let colorClass = "bg-warm-white text-dark-brown border-light-brown";
@@ -349,17 +348,10 @@ export default function TickerDetailPage() {
 
       {/* Watchlist Data (if on watchlist) */}
       {watchlistItem && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div className="border-2 border-ink shadow-hard bg-warm-white p-6">
-            <PriceTargets
-              watchlistId={watchlistItem.id}
-              ticker={watchlistItem.ticker}
-            />
-          </div>
-          <div className="border-2 border-ink shadow-hard bg-warm-white p-6">
-            <JournalEntries watchlistId={watchlistItem.id} />
-          </div>
-        </div>
+        <TargetsAndJournal
+          watchlistId={watchlistItem.id}
+          ticker={watchlistItem.ticker}
+        />
       )}
     </div>
   );

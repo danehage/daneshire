@@ -286,6 +286,25 @@ See `DEPLOY.md` for full Cloud Run + Cloud Scheduler setup.
 
 ---
 
+## Where We Left Off (2026-05-21) — Issue #14
+
+**Earnings calendar tracer bullet — complete.**
+
+- `earnings_events` table + Alembic migration (`b7c8d9e0f1a2`)
+- `FinnhubClient` in `backend/app/services/finnhub_client.py` (throttle + retry)
+- `EarningsDateUnknown` error variant added to `MarketData` hierarchy
+- `MarketData.earnings_calendar(start, end)` — 6h TTL cache + single-flight
+- `POST /api/internal/earnings/refresh-calendar` (scheduler-gated, upserts 4 weeks)
+- `GET /api/earnings/calendar?start=&end=` (public, defaults today + 28 days)
+- `frontend/src/api/earnings.js`, `frontend/src/hooks/useEarnings.js`
+- `frontend/src/pages/EarningsPage.jsx` — sortable table, empty state, date filter
+- `/earnings` route in `App.jsx`, nav link in `Layout.jsx`
+- `FINNHUB_API_KEY` added to config + `.env.example`
+- 14 unit tests for client + seam (all pass); 136 tests collected, no import errors
+- Frontend build passes
+
+---
+
 ## Where We Left Off (2026-05-21)
 
 **Earnings IV module — scaffolding committed, 8 issues filed.** PRD v0.2 (`daneshire-earnings-iv-prd.md`) frames the module as a purely additive extension over existing seams. Five ADRs ratified in `docs/adr/0002`–`0006` (tastytrade-in-seam, move formulas, IV-rank cutover, commissions, scheduler pattern). PRD §13 build order broken into 8 vertical slices on the tracker:

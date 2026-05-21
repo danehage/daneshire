@@ -55,17 +55,6 @@ const PRIORITY_COLORS = {
   urgent: "bg-error text-warm-white",
 };
 
-function formatCondition(condition) {
-  if (!condition?.metric || !condition?.operator || condition?.value == null) {
-    return "Invalid condition";
-  }
-  const { metric, operator, value } = condition;
-  let valueStr = value;
-  if (metric === "price") valueStr = `$${value}`;
-  else if (metric === "rsi" || metric === "hv_rank") valueStr = `${value}%`;
-  return `${metric} ${operator} ${valueStr}`;
-}
-
 function formatDate(dateString) {
   if (!dateString) return "—";
   const date = new Date(dateString);
@@ -324,7 +313,7 @@ function AlertRow({ alert }) {
         </td>
         <td className="py-3 px-4">
           <span className="font-mono text-sm text-mid-brown">
-            {formatCondition(alert.condition)}
+            {alert.formatted_condition}
           </span>
         </td>
         <td className="py-3 px-4">

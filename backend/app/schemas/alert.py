@@ -1,79 +1,75 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    computed_field,
+    model_validator,
+)
+
+from app.schemas.alert_conditions import condition_from_payload
 
 
-class AlertCondition(BaseModel):
-    """Structured alert condition for validation."""
-
-    metric: str = Field(..., description="Metric to check: price, rsi, hv_rank, eps, etc.")
-    operator: str = Field(..., pattern="^(>|>=|<|<=|==)$")
-    value: float = Field(..., description="Target value to compare against")
-    trigger_date: Optional[str] = Field(
-        default=None, description="For earnings_check: date to evaluate"
-    )
+AlertType = Literal[
+    "price_cross",
+    "earnings_check",
+    "date_reminder",
+    "technical_signal",
+    "custom",
+]
+AlertStatus = Literal["active", "triggered", "dismissed", "expired"]
+AlertPriority = Literal["low", "normal", "high", "urgent"]
 
 
 class AlertCreate(BaseModel):
     watchlist_id: Optional[UUID] = None
     ticker: str = Field(..., max_length=10)
     name: str = Field(..., max_length=100)
-    alert_type: str = Field(
-        ...,
-        pattern="^(price_cross|earnings_check|date_reminder|technical_signal|custom)$",
-    )
+    alert_type: AlertType
     condition: dict[str, Any] = Field(
-        ..., description="JSONB condition: {metric, operator, value, ...}"
+        ..., description="Variant payload — validated against the typed Condition union"
     )
     action_note: Optional[str] = None
-    priority: str = Field(default="normal", pattern="^(low|normal|high|urgent)$")
+    priority: AlertPriority = "normal"
     expires_at: Optional[datetime] = None
 
-    @field_validator("condition")
-    @classmethod
-    def validate_condition(cls, v: dict) -> dict:
-        """Ensure condition has required fields."""
-        if "metric" not in v:
-            raise ValueError("condition must include 'metric'")
-        if "operator" not in v:
-            raise ValueError("condition must include 'operator'")
-        if "value" not in v:
-            raise ValueError("condition must include 'value'")
-        if v["operator"] not in (">", ">=", "<", "<=", "=="):
-            raise ValueError("operator must be one of: >, >=, <, <=, ==")
-        return v
+    @model_validator(mode="after")
+    def validate_condition_against_type(self) -> "AlertCreate":
+        # Defer to the discriminated Condition union — operator allow-list,
+        # required fields, and value coercion all live there.
+        try:
+            condition_from_payload(self.alert_type, self.condition)
+        except ValidationError as exc:
+            raise ValueError(
+                f"Invalid condition for {self.alert_type}: {exc.errors()}"
+            ) from exc
+        return self
 
 
 class AlertUpdate(BaseModel):
+    """PATCH payload. ``condition`` is not validated here because the
+    alert's existing ``alert_type`` is needed for dispatch — the route
+    re-validates against the stored record."""
+
     name: Optional[str] = Field(default=None, max_length=100)
     condition: Optional[dict[str, Any]] = None
     action_note: Optional[str] = None
-    status: Optional[str] = Field(
-        default=None, pattern="^(active|triggered|dismissed|expired)$"
-    )
-    priority: Optional[str] = Field(default=None, pattern="^(low|normal|high|urgent)$")
+    status: Optional[AlertStatus] = None
+    priority: Optional[AlertPriority] = None
     expires_at: Optional[datetime] = None
-
-    @field_validator("condition")
-    @classmethod
-    def validate_condition(cls, v: Optional[dict]) -> Optional[dict]:
-        if v is None:
-            return v
-        if "metric" not in v:
-            raise ValueError("condition must include 'metric'")
-        if "operator" not in v:
-            raise ValueError("condition must include 'operator'")
-        if "value" not in v:
-            raise ValueError("condition must include 'value'")
-        if v["operator"] not in (">", ">=", "<", "<=", "=="):
-            raise ValueError("operator must be one of: >, >=, <, <=, ==")
-        return v
 
 
 class AlertResponse(BaseModel):
+    """Read model. ``formatted_condition`` is computed via the typed
+    Condition's ``.format()`` so the UI and the notifier share one
+    source of truth.
+    """
+
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
@@ -89,6 +85,14 @@ class AlertResponse(BaseModel):
     expires_at: Optional[datetime]
     created_at: datetime
 
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def formatted_condition(self) -> str:
+        try:
+            return condition_from_payload(self.alert_type, self.condition).format()
+        except (ValidationError, Exception):
+            return "Invalid condition"
+
 
 class AlertHistoryResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -103,18 +107,6 @@ class AlertHistoryResponse(BaseModel):
 
 
 class AlertEvaluateRequest(BaseModel):
-    """Request to manually evaluate alerts (for testing)."""
+    """Optional filter to scope a manual evaluation. ``None`` runs every type."""
 
-    alert_type: Optional[str] = Field(
-        default=None,
-        pattern="^(price_cross|earnings_check|date_reminder|technical_signal|custom)$",
-        description="Filter to specific alert type, or evaluate all if not specified",
-    )
-
-
-class AlertEvaluateResponse(BaseModel):
-    """Response from alert evaluation."""
-
-    evaluated: int
-    triggered: int
-    notifications_sent: int
+    alert_type: Optional[AlertType] = None

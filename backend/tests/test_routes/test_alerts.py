@@ -49,6 +49,9 @@ async def test_create_alert(client: AsyncClient):
     assert data["condition"]["metric"] == "price"
     assert data["condition"]["operator"] == ">"
     assert data["condition"]["value"] == 200
+    # AlertResponse computes a formatted_condition via the typed
+    # Condition union — single source of truth for both UI and notifier.
+    assert data["formatted_condition"] == "price > $200.00"
 
 
 @pytest.mark.asyncio
@@ -325,23 +328,32 @@ async def test_create_alert_priorities(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_create_alert_types(client: AsyncClient):
-    """Test all alert types."""
-    alert_types = [
-        "price_cross",
-        "earnings_check",
-        "date_reminder",
-        "technical_signal",
-        "custom",
+    """Test all alert types. Each type now requires the condition shape
+    matching its typed Condition variant."""
+    cases = [
+        ("price_cross", {"metric": "price", "operator": ">", "value": 200}),
+        (
+            "earnings_check",
+            {
+                "metric": "eps",
+                "operator": ">",
+                "value": 4.0,
+                "trigger_date": "2026-06-01",
+            },
+        ),
+        ("date_reminder", {"trigger_date": "2026-06-01"}),
+        ("technical_signal", {"metric": "rsi", "operator": "<", "value": 30}),
+        ("custom", {"payload": {"anything": True}}),
     ]
-    for alert_type in alert_types:
+    for alert_type, condition in cases:
         response = await client.post(
             "/api/alerts",
             json={
                 "ticker": "AAPL",
                 "name": f"Type {alert_type}",
                 "alert_type": alert_type,
-                "condition": {"metric": "price", "operator": ">", "value": 200},
+                "condition": condition,
             },
         )
-        assert response.status_code == 201
+        assert response.status_code == 201, response.text
         assert response.json()["alert_type"] == alert_type

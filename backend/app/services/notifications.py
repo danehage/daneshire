@@ -1,13 +1,20 @@
 """
 Pushover notification service for alert notifications.
+
+The single source of truth for the human-readable rendering of an alert
+is :meth:`app.schemas.alert_conditions.Condition.format`. Callers pass
+the typed :class:`Condition` here so we can format it exactly once.
 """
 
 import logging
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import httpx
 
 from app.config import settings
+
+if TYPE_CHECKING:
+    from app.schemas.alert_conditions import Condition
 
 logger = logging.getLogger(__name__)
 
@@ -121,73 +128,30 @@ class PushoverClient:
 async def send_alert_notification(
     ticker: str,
     alert_name: str,
-    condition_description: str,
-    actual_value: float,
+    condition: "Condition",
+    actual_value: Optional[float] = None,
     action_note: Optional[str] = None,
     priority: str = "normal",
 ) -> bool:
-    """
-    Send an alert triggered notification.
+    """Send a triggered-alert push.
 
-    Args:
-        ticker: Stock ticker symbol
-        alert_name: Name of the alert
-        condition_description: Human-readable condition (e.g., "price > $150")
-        actual_value: The actual value that triggered the alert
-        action_note: Optional action to take
-        priority: Alert priority level
-
-    Returns:
-        True if notification was sent
+    ``condition`` is the typed variant (PriceCondition, ReminderCondition,
+    ...); its ``.format()`` is the single source for the human-readable
+    description. ``actual_value`` may be ``None`` for reminders.
     """
     client = PushoverClient()
 
     title = f"{ticker}: {alert_name}"
 
-    message_parts = [
-        f"Condition: {condition_description}",
-        f"Actual: {actual_value:.2f}",
-    ]
-
+    message_parts = [f"Condition: {condition.format()}"]
+    if actual_value is not None:
+        message_parts.append(f"Actual: {actual_value:.2f}")
     if action_note:
         message_parts.append(f"\nAction: {action_note}")
 
     message = "\n".join(message_parts)
 
     try:
-        result = await client.send(
-            title=title,
-            message=message,
-            priority=priority,
-        )
-        return result
+        return await client.send(title=title, message=message, priority=priority)
     finally:
         await client.close()
-
-
-def format_condition(condition: dict) -> str:
-    """
-    Format a condition dict as a human-readable string.
-
-    Args:
-        condition: {"metric": "price", "operator": ">", "value": 150}
-
-    Returns:
-        "price > 150"
-    """
-    metric = condition.get("metric", "?")
-    operator = condition.get("operator", "?")
-    value = condition.get("value", "?")
-
-    # Format value nicely
-    if isinstance(value, float):
-        if metric == "price":
-            value_str = f"${value:.2f}"
-        elif metric in ("rsi", "hv_rank", "range_position"):
-            value_str = f"{value:.1f}"
-        else:
-            value_str = f"{value:.2f}"
-    else:
-        value_str = str(value)
-
-    return f"{metric} {operator} {value_str}"

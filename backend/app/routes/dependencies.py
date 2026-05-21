@@ -7,6 +7,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models.watchlist import WatchlistItem
+from app.services.alert_engine import AlertEngine
+from app.services.market import MarketData, get_market
+
+
+def get_alert_engine(
+    db: AsyncSession = Depends(get_db),
+    market: MarketData = Depends(get_market),
+) -> AlertEngine:
+    """Construct an :class:`AlertEngine` wired to the request-scoped DB
+    session and the singleton :class:`MarketData` seam.
+
+    The default Pushover notifier is baked in; tests substitute via
+    ``app.dependency_overrides[get_alert_engine]``.
+    """
+    return AlertEngine(db=db, market=market)
 
 
 async def load_watchlist_item(

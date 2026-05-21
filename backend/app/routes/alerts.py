@@ -1,27 +1,32 @@
 """
 Alerts API routes.
+
+All CRUD lives here; the evaluation path delegates to
+:class:`AlertEngine`. ``POST /api/alerts/evaluate`` returns the full
+:class:`RunSummary` so the endpoint doubles as a debugging surface.
 """
 
-from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models.alert import Alert, AlertHistory
+from app.models.alert import Alert
+from app.routes.dependencies import get_alert_engine
 from app.schemas.alert import (
     AlertCreate,
-    AlertUpdate,
-    AlertResponse,
-    AlertHistoryResponse,
     AlertEvaluateRequest,
-    AlertEvaluateResponse,
+    AlertHistoryResponse,
+    AlertResponse,
+    AlertUpdate,
 )
+from app.schemas.alert_conditions import condition_from_payload
+from app.schemas.alert_runs import RunSummary
 from app.services.alert_engine import AlertEngine
-from app.services.market import MarketData, MarketDataError, get_market
 
 router = APIRouter(prefix="/api/alerts", tags=["alerts"])
 
@@ -93,13 +98,24 @@ async def update_alert(
     alert_update: AlertUpdate,
     db: AsyncSession = Depends(get_db),
 ):
-    """Update an alert."""
+    """Update an alert. ``condition`` is re-validated against the stored
+    ``alert_type`` so the typed Condition union still owns the rules."""
     result = await db.execute(select(Alert).where(Alert.id == alert_id))
     alert = result.scalar_one_or_none()
     if not alert:
         raise HTTPException(status_code=404, detail="Alert not found")
 
     update_data = alert_update.model_dump(exclude_unset=True)
+
+    if "condition" in update_data and update_data["condition"] is not None:
+        try:
+            condition_from_payload(alert.alert_type, update_data["condition"])
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid condition for {alert.alert_type}: {exc.errors()}",
+            ) from exc
+
     for key, value in update_data.items():
         setattr(alert, key, value)
 
@@ -147,7 +163,6 @@ async def get_alert_history(
     db: AsyncSession = Depends(get_db),
 ):
     """Get evaluation history for an alert."""
-    # Verify alert exists
     result = await db.execute(select(Alert).where(Alert.id == alert_id))
     alert = result.scalar_one_or_none()
     if not alert:
@@ -157,57 +172,12 @@ async def get_alert_history(
     return await engine.get_alert_history(alert_id, limit=limit)
 
 
-@router.post("/evaluate", response_model=AlertEvaluateResponse)
+@router.post("/evaluate", response_model=RunSummary)
 async def evaluate_alerts(
     request: AlertEvaluateRequest,
-    db: AsyncSession = Depends(get_db),
-    market: MarketData = Depends(get_market),
+    engine: AlertEngine = Depends(get_alert_engine),
 ):
-    """
-    Manually trigger alert evaluation (for testing).
-
-    This fetches current market data and evaluates all active alerts.
-    """
-    engine = AlertEngine(db)
-
-    # Get all active alerts
-    alerts = await engine.get_active_alerts(alert_type=request.alert_type)
-
-    # Get unique tickers
-    tickers = list(set(alert.ticker.upper() for alert in alerts))
-
-    if not tickers:
-        return AlertEvaluateResponse(evaluated=0, triggered=0, notifications_sent=0)
-
-    # Fetch market data for all tickers via the shared seam so concurrent
-    # alert evaluations can de-dupe in-flight FMP calls.
-    analyses = await market.analyses(tickers)
-    market_data_by_ticker: dict[str, dict] = {}
-    for ticker, result in analyses.items():
-        if isinstance(result, MarketDataError):
-            continue
-        market_data_by_ticker[ticker] = result.model_dump()
-
-    # Evaluate alerts
-    total_evaluated = 0
-    total_triggered = 0
-    total_notifications = 0
-
-    for alert in alerts:
-        ticker_data = market_data_by_ticker.get(alert.ticker.upper())
-        if not ticker_data:
-            continue
-
-        history = await engine.evaluate_alert(alert, ticker_data)
-        total_evaluated += 1
-
-        if history.condition_met:
-            total_triggered += 1
-            if history.notification_sent:
-                total_notifications += 1
-
-    return AlertEvaluateResponse(
-        evaluated=total_evaluated,
-        triggered=total_triggered,
-        notifications_sent=total_notifications,
-    )
+    """Manually trigger evaluation. ``alert_type=None`` runs every type."""
+    if request.alert_type is None:
+        return await engine.run_all()
+    return await engine.run(request.alert_type)

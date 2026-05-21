@@ -1,21 +1,31 @@
 """
 Tests for internal Cloud Scheduler endpoints.
+
+Each route is now a one-liner over :meth:`AlertEngine.run`. The tests
+verify the HTTP surface (auth + pass-through) without re-testing engine
+behaviour, which is covered exhaustively in
+``tests/test_services/test_alert_engine.py``.
 """
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import delete
-from unittest.mock import patch, AsyncMock
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.main import app
 from app.models.alert import Alert, AlertHistory
-from app.config import settings
-from app.schemas.market import TechnicalAnalysis
-from app.services.market import MarketData, TickerNotFound, get_market
+from app.routes.dependencies import get_alert_engine
+from app.schemas.alert_conditions import Condition, Met
+from app.schemas.market import PriceQuote, TechnicalAnalysis
+from app.services.alert_engine import AlertEngine
+from app.services.market import TickerNotFound
 
 
-# Use a consistent test secret
 TEST_SECRET = "test-scheduler-secret"
 
 
@@ -41,38 +51,57 @@ async def cleanup_alerts(db_session: AsyncSession):
 
 
 def auth_headers():
-    """Return headers with scheduler secret."""
     return {"X-Scheduler-Secret": TEST_SECRET}
 
 
+# ---------------------------------------------------------------------------
+# FakeMarket + RecordingNotifier — share the orchestrator-test fixtures
+# ---------------------------------------------------------------------------
+
+
+@dataclass
 class _FakeMarket:
-    """Stand-in for ``MarketData`` used via ``dependency_overrides``.
+    quotes_by_ticker: dict = field(default_factory=dict)
+    analyses_by_ticker: dict = field(default_factory=dict)
 
-    ``analyses_by_ticker`` maps ticker -> raw dict (will be wrapped in a
-    ``TechnicalAnalysis``) or to a ``MarketDataError`` instance to surface
-    a per-ticker failure.
-    """
-
-    def __init__(self, analyses_by_ticker: dict[str, dict]):
-        self._data = analyses_by_ticker
+    async def quotes(self, tickers):
+        out = {}
+        for raw in tickers:
+            symbol = raw.upper()
+            out[symbol] = self.quotes_by_ticker.get(symbol, TickerNotFound(symbol))
+        return out
 
     async def analyses(self, tickers):
-        out: dict = {}
-        for raw_ticker in tickers:
-            symbol = raw_ticker.upper()
-            payload = self._data.get(symbol)
-            if payload is None:
-                out[symbol] = TickerNotFound(symbol)
-            else:
-                out[symbol] = TechnicalAnalysis(ticker=symbol, **payload)
+        out = {}
+        for raw in tickers:
+            symbol = raw.upper()
+            out[symbol] = self.analyses_by_ticker.get(symbol, TickerNotFound(symbol))
         return out
 
 
-def _override_market(analyses_by_ticker: dict[str, dict]):
-    """Install a ``MarketData`` override on the app for the test's scope."""
-    fake = _FakeMarket(analyses_by_ticker)
-    app.dependency_overrides[get_market] = lambda: fake
-    return fake
+@dataclass
+class _RecordingNotifier:
+    calls: list = field(default_factory=list)
+    succeed: bool = True
+
+    async def __call__(self, alert, condition: Condition, outcome: Met) -> bool:
+        self.calls.append((alert.ticker, condition, outcome))
+        return self.succeed
+
+
+def _override_engine(db_session: AsyncSession, market: _FakeMarket, notifier: _RecordingNotifier):
+    """Replace :func:`get_alert_engine` with one returning a fully
+    fake-wired engine for the duration of a test."""
+
+    def factory():
+        return AlertEngine(db_session, market=market, notifier=notifier)
+
+    app.dependency_overrides[get_alert_engine] = factory
+
+
+# ---------------------------------------------------------------------------
+# Auth + health
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
@@ -90,11 +119,9 @@ async def test_internal_health(client: AsyncClient):
 @pytest.mark.asyncio
 async def test_endpoint_requires_secret(client: AsyncClient):
     """Endpoints require valid scheduler secret."""
-    # Without header
     response = await client.post("/api/internal/alerts/expire-stale")
     assert response.status_code == 401
 
-    # With wrong header
     response = await client.post(
         "/api/internal/alerts/expire-stale",
         headers={"X-Scheduler-Secret": "wrong-secret"},
@@ -102,88 +129,75 @@ async def test_endpoint_requires_secret(client: AsyncClient):
     assert response.status_code == 401
 
 
-@pytest.mark.asyncio
-async def test_expire_stale_with_secret(client: AsyncClient):
-    """Endpoint works with correct secret."""
-    response = await client.post(
-        "/api/internal/alerts/expire-stale",
-        headers=auth_headers(),
-    )
-    assert response.status_code == 200
-    assert response.json()["status"] == "ok"
+# ---------------------------------------------------------------------------
+# Price / technical / reminder run-* routes
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_run_price_checks_no_alerts(client: AsyncClient):
-    """Price check with no alerts returns zero counts."""
+    """Returns an empty RunSummary when no alerts exist."""
     response = await client.post(
-        "/api/internal/alerts/run-price-checks",
-        headers=auth_headers(),
+        "/api/internal/alerts/run-price-checks", headers=auth_headers()
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "ok"
-    assert data["evaluated"] == 0
-    assert data["triggered"] == 0
+    assert data["alert_type"] == "price_cross"
+    assert data["met"] == 0
+    assert data["not_met"] == 0
+    assert data["errored"] == 0
     assert data["notifications_sent"] == 0
+    assert data["outcomes"] == []
 
 
 @pytest.mark.asyncio
-async def test_run_price_checks_with_alert(client: AsyncClient, db_session: AsyncSession):
-    """Price check evaluates active price alerts."""
-    # Create a price alert
+async def test_run_price_checks_with_alert(
+    client: AsyncClient, db_session: AsyncSession
+):
+    """Price check evaluates active price alerts via the injected engine."""
     await client.post(
         "/api/alerts",
         json={
             "ticker": "AAPL",
             "name": "Test price alert",
             "alert_type": "price_cross",
-            "condition": {"metric": "price", "operator": ">", "value": 1},  # Always true
+            "condition": {"metric": "price", "operator": ">", "value": 1},
         },
     )
 
-    # Inject a MarketData fake via dependency override (no more module-level
-    # ``patch("app.routes.internal.StockScanner")``).
-    _override_market({"AAPL": {"price": 150.0}})
-
+    market = _FakeMarket(quotes_by_ticker={"AAPL": PriceQuote(ticker="AAPL", price=150.0)})
+    notifier = _RecordingNotifier()
+    _override_engine(db_session, market, notifier)
     try:
-        # Mock notification to not actually send
-        with patch(
-            "app.routes.internal.send_alert_notification", new_callable=AsyncMock
-        ) as mock_notify:
-            mock_notify.return_value = True
-
-            response = await client.post(
-                "/api/internal/alerts/run-price-checks",
-                headers=auth_headers(),
-            )
+        response = await client.post(
+            "/api/internal/alerts/run-price-checks", headers=auth_headers()
+        )
     finally:
-        app.dependency_overrides.pop(get_market, None)
+        app.dependency_overrides.pop(get_alert_engine, None)
 
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "ok"
-    assert data["evaluated"] == 1
-    assert data["triggered"] == 1
+    assert data["met"] == 1
+    assert data["notifications_sent"] == 1
+    assert len(notifier.calls) == 1
 
 
 @pytest.mark.asyncio
 async def test_run_technical_checks_no_alerts(client: AsyncClient):
-    """Technical check with no alerts returns zero counts."""
     response = await client.post(
-        "/api/internal/alerts/run-technical-checks",
-        headers=auth_headers(),
+        "/api/internal/alerts/run-technical-checks", headers=auth_headers()
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "ok"
-    assert data["evaluated"] == 0
+    assert data["alert_type"] == "technical_signal"
+    assert data["met"] == 0
 
 
 @pytest.mark.asyncio
-async def test_run_technical_checks_rsi_alert(client: AsyncClient):
+async def test_run_technical_checks_rsi_alert(
+    client: AsyncClient, db_session: AsyncSession
+):
     """Technical check evaluates RSI alerts."""
-    # Create an RSI alert
     await client.post(
         "/api/alerts",
         json={
@@ -194,46 +208,56 @@ async def test_run_technical_checks_rsi_alert(client: AsyncClient):
         },
     )
 
-    _override_market({"MSFT": {"price": 400.0, "rsi": 25.0}})
-
+    market = _FakeMarket(
+        analyses_by_ticker={
+            "MSFT": TechnicalAnalysis(ticker="MSFT", price=400.0, rsi=25.0)
+        }
+    )
+    notifier = _RecordingNotifier()
+    _override_engine(db_session, market, notifier)
     try:
-        with patch(
-            "app.routes.internal.send_alert_notification", new_callable=AsyncMock
-        ) as mock_notify:
-            mock_notify.return_value = True
-
-            response = await client.post(
-                "/api/internal/alerts/run-technical-checks",
-                headers=auth_headers(),
-            )
+        response = await client.post(
+            "/api/internal/alerts/run-technical-checks", headers=auth_headers()
+        )
     finally:
-        app.dependency_overrides.pop(get_market, None)
+        app.dependency_overrides.pop(get_alert_engine, None)
 
     assert response.status_code == 200
     data = response.json()
-    assert data["evaluated"] == 1
-    assert data["triggered"] == 1
+    assert data["met"] == 1
 
 
 @pytest.mark.asyncio
 async def test_run_reminders_no_alerts(client: AsyncClient):
-    """Reminders with no alerts returns zero counts."""
     response = await client.post(
-        "/api/internal/alerts/run-reminders",
-        headers=auth_headers(),
+        "/api/internal/alerts/run-reminders", headers=auth_headers()
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "ok"
-    assert data["triggered"] == 0
+    assert data["alert_type"] == "date_reminder"
+    assert data["met"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Expire stale
+# ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_expire_stale_expires_old_alerts(client: AsyncClient, db_session: AsyncSession):
-    """Expire stale marks expired alerts."""
+async def test_expire_stale_with_secret(client: AsyncClient):
+    response = await client.post(
+        "/api/internal/alerts/expire-stale", headers=auth_headers()
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_expire_stale_expires_old_alerts(
+    client: AsyncClient, db_session: AsyncSession
+):
     from datetime import datetime, timedelta, timezone
 
-    # Create an alert that expired yesterday
     await client.post(
         "/api/alerts",
         json={
@@ -244,8 +268,6 @@ async def test_expire_stale_expires_old_alerts(client: AsyncClient, db_session: 
             "expires_at": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat(),
         },
     )
-
-    # Create an alert that expires tomorrow (should not be affected)
     await client.post(
         "/api/alerts",
         json={
@@ -258,21 +280,16 @@ async def test_expire_stale_expires_old_alerts(client: AsyncClient, db_session: 
     )
 
     response = await client.post(
-        "/api/internal/alerts/expire-stale",
-        headers=auth_headers(),
+        "/api/internal/alerts/expire-stale", headers=auth_headers()
     )
     assert response.status_code == 200
     data = response.json()
     assert data["expired"] == 1
 
-    # Verify the expired alert is now expired
-    alerts_response = await client.get("/api/alerts?status=expired")
-    expired_alerts = alerts_response.json()
-    assert len(expired_alerts) == 1
-    assert expired_alerts[0]["ticker"] == "AAPL"
+    expired = await client.get("/api/alerts?status=expired")
+    assert len(expired.json()) == 1
+    assert expired.json()[0]["ticker"] == "AAPL"
 
-    # Verify the future alert is still active
-    active_response = await client.get("/api/alerts?status=active")
-    active_alerts = active_response.json()
-    assert len(active_alerts) == 1
-    assert active_alerts[0]["ticker"] == "MSFT"
+    active = await client.get("/api/alerts?status=active")
+    assert len(active.json()) == 1
+    assert active.json()[0]["ticker"] == "MSFT"

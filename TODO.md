@@ -283,3 +283,22 @@ See `DEPLOY.md` for full Cloud Run + Cloud Scheduler setup.
 - Brutalist UI styling
 
 **Required env vars:** `NEON_DATABASE_URL`, `FMP_API_KEY`, `PUSHOVER_USER_KEY`, `PUSHOVER_API_TOKEN`, `SCHEDULER_SECRET` (in backend/.env)
+
+---
+
+## Where We Left Off (2026-05-21)
+
+**Earnings IV module — scaffolding committed, 8 issues filed.** PRD v0.2 (`daneshire-earnings-iv-prd.md`) frames the module as a purely additive extension over existing seams. Five ADRs ratified in `docs/adr/0002`–`0006` (tastytrade-in-seam, move formulas, IV-rank cutover, commissions, scheduler pattern). PRD §13 build order broken into 8 vertical slices on the tracker:
+
+| Issue | Slice | Blocked by |
+|---|---|---|
+| [#14](https://github.com/danehage/daneshire/issues/14) | Earnings calendar tracer bullet | none |
+| [#15](https://github.com/danehage/daneshire/issues/15) | TastytradeClient + MarketData IV seam (backend) | #14 |
+| [#16](https://github.com/danehage/daneshire/issues/16) | Earnings trade journal CRUD | #14 |
+| [#17](https://github.com/danehage/daneshire/issues/17) | IV columns on the screener (frontend) | #15 |
+| [#18](https://github.com/danehage/daneshire/issues/18) | Earnings alert condition | #15 |
+| [#19](https://github.com/danehage/daneshire/issues/19) | Edge ratio + screener filters | #17 |
+| [#20](https://github.com/danehage/daneshire/issues/20) | EarningsCard on TickerDetailPage | #19, #16 |
+| [#21](https://github.com/danehage/daneshire/issues/21) | Cloud Scheduler config + smoke | #18 |
+
+**Pickup:** #14 — earnings calendar tracer bullet (PRD §14 verbatim). Proves every layer end-to-end before any options data lands.

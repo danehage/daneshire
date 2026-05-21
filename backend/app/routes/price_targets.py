@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.price_target import PriceTarget
 from app.models.watchlist import WatchlistItem
+from app.routes.dependencies import load_watchlist_item
 from app.schemas.price_target import (
     PriceTargetCreate,
     PriceTargetUpdate,
@@ -16,26 +17,13 @@ from app.schemas.price_target import (
 router = APIRouter(prefix="/api/watchlist", tags=["price_targets"])
 
 
-async def get_watchlist_item_or_404(
-    watchlist_id: UUID, db: AsyncSession
-) -> WatchlistItem:
-    result = await db.execute(
-        select(WatchlistItem).where(WatchlistItem.id == watchlist_id)
-    )
-    item = result.scalar_one_or_none()
-    if not item:
-        raise HTTPException(status_code=404, detail="Watchlist item not found")
-    return item
-
-
 @router.get("/{watchlist_id}/targets", response_model=list[PriceTargetResponse])
 async def list_price_targets(
     watchlist_id: UUID,
+    watchlist_item: WatchlistItem = Depends(load_watchlist_item),
     db: AsyncSession = Depends(get_db),
 ):
     """Get all price targets for a watchlist item."""
-    await get_watchlist_item_or_404(watchlist_id, db)
-
     result = await db.execute(
         select(PriceTarget)
         .where(PriceTarget.watchlist_id == watchlist_id)
@@ -50,11 +38,10 @@ async def list_price_targets(
 async def create_price_target(
     watchlist_id: UUID,
     target: PriceTargetCreate,
+    watchlist_item: WatchlistItem = Depends(load_watchlist_item),
     db: AsyncSession = Depends(get_db),
 ):
     """Add a price target to a watchlist item."""
-    await get_watchlist_item_or_404(watchlist_id, db)
-
     db_target = PriceTarget(
         watchlist_id=watchlist_id,
         label=target.label,

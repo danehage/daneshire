@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.journal import JournalEntry
 from app.models.watchlist import WatchlistItem
+from app.routes.dependencies import load_watchlist_item
 from app.schemas.journal import (
     JournalEntryCreate,
     JournalEntryUpdate,
@@ -20,28 +21,15 @@ from app.schemas.journal import (
 router = APIRouter(tags=["journal"])
 
 
-async def get_watchlist_item_or_404(
-    watchlist_id: UUID, db: AsyncSession
-) -> WatchlistItem:
-    result = await db.execute(
-        select(WatchlistItem).where(WatchlistItem.id == watchlist_id)
-    )
-    item = result.scalar_one_or_none()
-    if not item:
-        raise HTTPException(status_code=404, detail="Watchlist item not found")
-    return item
-
-
 @router.get(
     "/api/watchlist/{watchlist_id}/journal", response_model=list[JournalEntryResponse]
 )
 async def list_journal_entries(
     watchlist_id: UUID,
+    watchlist_item: WatchlistItem = Depends(load_watchlist_item),
     db: AsyncSession = Depends(get_db),
 ):
     """Get all journal entries for a watchlist item."""
-    await get_watchlist_item_or_404(watchlist_id, db)
-
     result = await db.execute(
         select(JournalEntry)
         .where(JournalEntry.watchlist_id == watchlist_id)
@@ -58,11 +46,10 @@ async def list_journal_entries(
 async def create_journal_entry(
     watchlist_id: UUID,
     entry: JournalEntryCreate,
+    watchlist_item: WatchlistItem = Depends(load_watchlist_item),
     db: AsyncSession = Depends(get_db),
 ):
     """Add a journal entry to a watchlist item."""
-    await get_watchlist_item_or_404(watchlist_id, db)
-
     db_entry = JournalEntry(
         watchlist_id=watchlist_id,
         entry_type=entry.entry_type,

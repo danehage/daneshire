@@ -7,6 +7,34 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sess
 from app.main import app
 from app.database import get_db
 from app.config import settings
+from app.services.market import get_market
+
+
+class _NullMarket:
+    """Default ``MarketData`` stand-in for tests.
+
+    The FastAPI ``lifespan`` startup that constructs the real
+    ``MarketData`` does not run under ``ASGITransport``, so any route
+    that depends on ``get_market`` would otherwise raise. Tests that
+    actually exercise market behaviour override ``get_market`` themselves
+    with a richer fake; this default just ensures unrelated tests don't
+    explode.
+    """
+
+    async def analyses(self, tickers):
+        return {}
+
+    async def quotes(self, tickers):
+        return {}
+
+    async def analysis(self, ticker):
+        raise RuntimeError("test forgot to override get_market")
+
+    async def quote(self, ticker):
+        raise RuntimeError("test forgot to override get_market")
+
+    async def history(self, ticker, days=252):
+        raise RuntimeError("test forgot to override get_market")
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -44,6 +72,9 @@ async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
         yield db_session
 
     app.dependency_overrides[get_db] = override_get_db
+    # Default market override — individual tests may replace this with a
+    # richer fake by reassigning ``app.dependency_overrides[get_market]``.
+    app.dependency_overrides[get_market] = lambda: _NullMarket()
 
     async with AsyncClient(
         transport=ASGITransport(app=app),

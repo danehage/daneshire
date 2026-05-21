@@ -31,8 +31,17 @@ class StockScanner:
     - Opportunity scoring
     """
 
-    def __init__(self, api_key: str = None, cache_dir: str = "scanner_cache"):
-        self.client = FMPClient(api_key=api_key)
+    def __init__(
+        self,
+        api_key: str = None,
+        cache_dir: str = "scanner_cache",
+        client: Optional[FMPClient] = None,
+    ):
+        # Accept an injected ``FMPClient`` so the throttle + retry budget can
+        # be shared across the whole process (see
+        # ``app.services.market.MarketData``). The default preserves the
+        # pre-existing behaviour for any direct caller.
+        self.client = client if client is not None else FMPClient(api_key=api_key)
         self.cache_dir = cache_dir
         self.indicators = TechnicalIndicators()
 

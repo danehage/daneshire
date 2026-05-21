@@ -8,8 +8,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import delete
 from unittest.mock import patch, AsyncMock
 
+from app.main import app
 from app.models.alert import Alert, AlertHistory
 from app.config import settings
+from app.schemas.market import TechnicalAnalysis
+from app.services.market import MarketData, TickerNotFound, get_market
 
 
 # Use a consistent test secret
@@ -40,6 +43,36 @@ async def cleanup_alerts(db_session: AsyncSession):
 def auth_headers():
     """Return headers with scheduler secret."""
     return {"X-Scheduler-Secret": TEST_SECRET}
+
+
+class _FakeMarket:
+    """Stand-in for ``MarketData`` used via ``dependency_overrides``.
+
+    ``analyses_by_ticker`` maps ticker -> raw dict (will be wrapped in a
+    ``TechnicalAnalysis``) or to a ``MarketDataError`` instance to surface
+    a per-ticker failure.
+    """
+
+    def __init__(self, analyses_by_ticker: dict[str, dict]):
+        self._data = analyses_by_ticker
+
+    async def analyses(self, tickers):
+        out: dict = {}
+        for raw_ticker in tickers:
+            symbol = raw_ticker.upper()
+            payload = self._data.get(symbol)
+            if payload is None:
+                out[symbol] = TickerNotFound(symbol)
+            else:
+                out[symbol] = TechnicalAnalysis(ticker=symbol, **payload)
+        return out
+
+
+def _override_market(analyses_by_ticker: dict[str, dict]):
+    """Install a ``MarketData`` override on the app for the test's scope."""
+    fake = _FakeMarket(analyses_by_ticker)
+    app.dependency_overrides[get_market] = lambda: fake
+    return fake
 
 
 @pytest.mark.asyncio
@@ -109,19 +142,23 @@ async def test_run_price_checks_with_alert(client: AsyncClient, db_session: Asyn
         },
     )
 
-    # Mock the scanner to return predictable data
-    with patch("app.routes.internal.StockScanner") as MockScanner:
-        mock_instance = MockScanner.return_value
-        mock_instance.analyze_ticker = AsyncMock(return_value={"price": 150.0})
+    # Inject a MarketData fake via dependency override (no more module-level
+    # ``patch("app.routes.internal.StockScanner")``).
+    _override_market({"AAPL": {"price": 150.0}})
 
+    try:
         # Mock notification to not actually send
-        with patch("app.routes.internal.send_alert_notification", new_callable=AsyncMock) as mock_notify:
+        with patch(
+            "app.routes.internal.send_alert_notification", new_callable=AsyncMock
+        ) as mock_notify:
             mock_notify.return_value = True
 
             response = await client.post(
                 "/api/internal/alerts/run-price-checks",
                 headers=auth_headers(),
             )
+    finally:
+        app.dependency_overrides.pop(get_market, None)
 
     assert response.status_code == 200
     data = response.json()
@@ -157,17 +194,20 @@ async def test_run_technical_checks_rsi_alert(client: AsyncClient):
         },
     )
 
-    with patch("app.routes.internal.StockScanner") as MockScanner:
-        mock_instance = MockScanner.return_value
-        mock_instance.analyze_ticker = AsyncMock(return_value={"rsi": 25.0, "price": 400})
+    _override_market({"MSFT": {"price": 400.0, "rsi": 25.0}})
 
-        with patch("app.routes.internal.send_alert_notification", new_callable=AsyncMock) as mock_notify:
+    try:
+        with patch(
+            "app.routes.internal.send_alert_notification", new_callable=AsyncMock
+        ) as mock_notify:
             mock_notify.return_value = True
 
             response = await client.post(
                 "/api/internal/alerts/run-technical-checks",
                 headers=auth_headers(),
             )
+    finally:
+        app.dependency_overrides.pop(get_market, None)
 
     assert response.status_code == 200
     data = response.json()

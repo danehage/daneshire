@@ -24,7 +24,7 @@ from app.services.notifications import (
     format_condition,
     PushoverClient,
 )
-from app.services import StockScanner
+from app.services.market import MarketData, MarketDataError, get_market
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +52,7 @@ async def verify_scheduler_secret(
 @router.post("/alerts/run-price-checks")
 async def run_price_checks(
     db: AsyncSession = Depends(get_db),
+    market: MarketData = Depends(get_market),
     _: None = Depends(verify_scheduler_secret),
 ):
     """
@@ -60,7 +61,6 @@ async def run_price_checks(
     Called by Cloud Scheduler every 15 minutes during market hours (9:30-16:00 ET weekdays).
     """
     engine = AlertEngine(db)
-    scanner = StockScanner()
 
     # Get active price alerts
     alerts = await engine.get_active_alerts(alert_type="price_cross")
@@ -71,16 +71,15 @@ async def run_price_checks(
     # Get unique tickers
     tickers = list(set(alert.ticker.upper() for alert in alerts))
 
-    # Fetch current prices for all tickers
-    market_data_by_ticker = {}
-    for ticker in tickers:
-        try:
-            result = await scanner.analyze_ticker(ticker)
-            if result:
-                market_data_by_ticker[ticker] = result
-        except Exception as e:
-            logger.error(f"Failed to fetch data for {ticker}: {e}")
+    # Fetch current data via the shared seam — concurrent runs share one
+    # throttled FMP queue, and per-ticker failures are explicit.
+    analyses = await market.analyses(tickers)
+    market_data_by_ticker: dict[str, dict] = {}
+    for ticker, result in analyses.items():
+        if isinstance(result, MarketDataError):
+            logger.error(f"Failed to fetch data for {ticker}: {result}")
             continue
+        market_data_by_ticker[ticker] = result.model_dump()
 
     # Evaluate alerts
     evaluated = 0
@@ -139,6 +138,7 @@ async def run_price_checks(
 @router.post("/alerts/run-technical-checks")
 async def run_technical_checks(
     db: AsyncSession = Depends(get_db),
+    market: MarketData = Depends(get_market),
     _: None = Depends(verify_scheduler_secret),
 ):
     """
@@ -147,7 +147,6 @@ async def run_technical_checks(
     Called by Cloud Scheduler every 15 minutes during market hours.
     """
     engine = AlertEngine(db)
-    scanner = StockScanner()
 
     # Get active technical alerts
     alerts = await engine.get_active_alerts(alert_type="technical_signal")
@@ -158,16 +157,14 @@ async def run_technical_checks(
     # Get unique tickers
     tickers = list(set(alert.ticker.upper() for alert in alerts))
 
-    # Fetch technical data for all tickers
-    market_data_by_ticker = {}
-    for ticker in tickers:
-        try:
-            result = await scanner.analyze_ticker(ticker)
-            if result:
-                market_data_by_ticker[ticker] = result
-        except Exception as e:
-            logger.error(f"Failed to fetch data for {ticker}: {e}")
+    # Fetch via the shared seam — see run_price_checks for rationale.
+    analyses = await market.analyses(tickers)
+    market_data_by_ticker: dict[str, dict] = {}
+    for ticker, result in analyses.items():
+        if isinstance(result, MarketDataError):
+            logger.error(f"Failed to fetch data for {ticker}: {result}")
             continue
+        market_data_by_ticker[ticker] = result.model_dump()
 
     # Evaluate alerts
     evaluated = 0

@@ -8,7 +8,7 @@ import logging
 from datetime import datetime
 from typing import AsyncGenerator
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.schemas.scan import (
@@ -18,7 +18,8 @@ from app.schemas.scan import (
     ScanResultsResponse,
     UniverseInfo,
 )
-from app.services import StockScanner, UNIVERSES, get_universe
+from app.services import UNIVERSES, get_universe
+from app.services.market import MarketData, TickerNotFound, get_market
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +50,10 @@ async def list_universes():
 
 
 @router.post("/execute", response_model=ScanExecuteResponse)
-async def execute_scan(request: ScanRequest):
+async def execute_scan(
+    request: ScanRequest,
+    market: MarketData = Depends(get_market),
+):
     """
     Start a new scan. Returns scan_id to use for streaming progress.
     In Cloud Run, we run the scan synchronously to avoid background task issues.
@@ -58,7 +62,8 @@ async def execute_scan(request: ScanRequest):
     if not tickers:
         raise HTTPException(status_code=400, detail=f"Unknown universe: {request.universe}")
 
-    scanner = StockScanner()
+    # Delegate to the shared scanner so the FMP throttle is process-wide.
+    scanner = market.scanner
 
     # Generate scan_id upfront
     import uuid
@@ -213,14 +218,19 @@ async def get_scan_results(scan_id: str):
 
 
 @router.get("/ticker/{symbol}", response_model=ScanResultItem)
-async def analyze_single_ticker(symbol: str):
+async def analyze_single_ticker(
+    symbol: str,
+    market: MarketData = Depends(get_market),
+):
     """
     Analyze a single ticker with full technical breakdown.
     """
-    scanner = StockScanner()
-    result = await scanner.analyze_ticker(symbol.upper())
-
-    if not result:
+    try:
+        analysis = await market.analysis(symbol.upper())
+    except TickerNotFound:
         raise HTTPException(status_code=404, detail=f"Could not analyze {symbol}")
 
-    return ScanResultItem(**result)
+    # ``analysis`` is a frozen Pydantic model with ``extra="allow"``; dump
+    # it through ``ScanResultItem`` so the route response schema is
+    # unchanged.
+    return ScanResultItem(**analysis.model_dump())

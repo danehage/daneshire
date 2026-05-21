@@ -109,11 +109,19 @@ from app.routes import (
     internal_router,
     dashboard_router,
 )
+from app.services.fmp_client import FMPClient
+from app.services.market import MarketData
+from app.services.scanner import StockScanner
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
+    # Startup: build one shared FMPClient, one StockScanner that consumes
+    # it, and one MarketData seam over both. Routes resolve the singleton
+    # via Depends(get_market). See CONTEXT.md § Market Data.
+    fmp = FMPClient()
+    scanner = StockScanner(client=fmp)
+    app.state.market = MarketData(fmp, scanner)
     yield
     # Shutdown
 

@@ -21,6 +21,7 @@ from app.schemas.alert import (
     AlertEvaluateResponse,
 )
 from app.services.alert_engine import AlertEngine
+from app.services.market import MarketData, MarketDataError, get_market
 
 router = APIRouter(prefix="/api/alerts", tags=["alerts"])
 
@@ -160,16 +161,14 @@ async def get_alert_history(
 async def evaluate_alerts(
     request: AlertEvaluateRequest,
     db: AsyncSession = Depends(get_db),
+    market: MarketData = Depends(get_market),
 ):
     """
     Manually trigger alert evaluation (for testing).
 
     This fetches current market data and evaluates all active alerts.
     """
-    from app.services import StockScanner
-
     engine = AlertEngine(db)
-    scanner = StockScanner()
 
     # Get all active alerts
     alerts = await engine.get_active_alerts(alert_type=request.alert_type)
@@ -180,15 +179,14 @@ async def evaluate_alerts(
     if not tickers:
         return AlertEvaluateResponse(evaluated=0, triggered=0, notifications_sent=0)
 
-    # Fetch market data for all tickers
-    market_data_by_ticker = {}
-    for ticker in tickers:
-        try:
-            result = await scanner.analyze_ticker(ticker)
-            if result:
-                market_data_by_ticker[ticker] = result
-        except Exception:
+    # Fetch market data for all tickers via the shared seam so concurrent
+    # alert evaluations can de-dupe in-flight FMP calls.
+    analyses = await market.analyses(tickers)
+    market_data_by_ticker: dict[str, dict] = {}
+    for ticker, result in analyses.items():
+        if isinstance(result, MarketDataError):
             continue
+        market_data_by_ticker[ticker] = result.model_dump()
 
     # Evaluate alerts
     total_evaluated = 0

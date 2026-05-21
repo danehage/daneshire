@@ -4,8 +4,7 @@ import {
   useUpdateWatchlistItem,
   useDeleteWatchlistItem,
 } from "../hooks/useWatchlist";
-import PriceTargets from "./PriceTargets";
-import JournalEntries from "./JournalEntries";
+import TargetsAndJournal from "./TargetsAndJournal";
 
 const STATUS_LABELS = {
   watching: "Watching",
@@ -128,10 +127,7 @@ export default function WatchlistRow({ item, dragHandleProps }) {
       {isExpanded && (
         <tr className="bg-cream border-b-2 border-ink">
           <td colSpan={6} className="px-8 py-4">
-            <div className="grid grid-cols-2 gap-8">
-              <PriceTargets watchlistId={item.id} ticker={item.ticker} />
-              <JournalEntries watchlistId={item.id} />
-            </div>
+            <TargetsAndJournal watchlistId={item.id} ticker={item.ticker} />
           </td>
         </tr>
       )}

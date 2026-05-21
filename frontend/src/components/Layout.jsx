@@ -4,6 +4,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 const navItems = [
   { path: "/", label: "Dashboard" },
   { path: "/watchlist", label: "Watchlist" },
+  { path: "/portfolio", label: "Portfolio" },
   { path: "/journal", label: "Journal" },
   { path: "/scanner", label: "Scanner" },
   { path: "/alerts", label: "Alerts" },

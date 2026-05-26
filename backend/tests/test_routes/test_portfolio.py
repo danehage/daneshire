@@ -2,6 +2,7 @@
 
 import pytest
 from datetime import datetime, timezone
+from decimal import Decimal
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import delete
@@ -57,8 +58,8 @@ async def test_commit_snapshot_creates_account(client: AsyncClient):
     assert response.status_code == 201
     data = response.json()
     assert "id" in data
-    assert data["cash_balance"] == "5000.0000"
-    assert data["total_value"] == "25000.0000"
+    assert Decimal(data["cash_balance"]) == Decimal("5000")
+    assert Decimal(data["total_value"]) == Decimal("25000")
     assert len(data["holdings"]) == 2
 
 
@@ -224,7 +225,7 @@ async def test_commit_options_position(client: AsyncClient):
     holding = response.json()["holdings"][0]
     assert holding["instrument_type"] == "option"
     assert holding["option_type"] == "call"
-    assert holding["strike"] == "190.0000"
+    assert Decimal(holding["strike"]) == Decimal("190")
     assert holding["expiry"] == "2026-06-20"
     assert holding["multiplier"] == 100
     assert holding["underlying_ticker"] == "AAPL"

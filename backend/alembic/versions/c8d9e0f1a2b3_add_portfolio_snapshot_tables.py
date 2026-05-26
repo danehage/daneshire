@@ -1,7 +1,7 @@
 """add portfolio snapshot tables
 
-Revision ID: b7c8d9e0f1a2
-Revises: a1b2c3d4e5f6
+Revision ID: c8d9e0f1a2b3
+Revises: b7c8d9e0f1a2
 Create Date: 2026-05-21 12:00:00.000000
 
 """
@@ -11,8 +11,8 @@ from alembic import op
 import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
-revision: str = 'b7c8d9e0f1a2'
-down_revision: Union[str, None] = 'a1b2c3d4e5f6'
+revision: str = 'c8d9e0f1a2b3'
+down_revision: Union[str, None] = 'b7c8d9e0f1a2'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

@@ -20,6 +20,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any, Generic, Optional, TypeVar
 
 from fastapi import Request
@@ -60,6 +61,13 @@ class RateLimited(MarketDataError):
 
 class UpstreamError(MarketDataError):
     """Unexpected FMP error (network, malformed payload, etc.)."""
+
+
+class EarningsDateUnknown(MarketDataError):
+    """Finnhub returned no earnings calendar data for the requested range."""
+
+    def __init__(self, message: str = ""):
+        super().__init__("", message or "EarningsDateUnknown")
 
 
 # ---------------------------------------------------------------------------
@@ -176,6 +184,7 @@ class _TTLSingleflightCache(Generic[T]):
 QUOTE_TTL_SECONDS = 10.0
 ANALYSIS_TTL_SECONDS = 5 * 60.0
 HISTORY_TTL_SECONDS = 60 * 60.0
+EARNINGS_TTL_SECONDS = 6 * 60 * 60.0  # 6 hours
 
 
 class MarketData:
@@ -189,14 +198,17 @@ class MarketData:
         self,
         client: FMPClient,
         scanner: StockScanner,
+        finnhub_client=None,
         *,
         quote_ttl: float = QUOTE_TTL_SECONDS,
         analysis_ttl: float = ANALYSIS_TTL_SECONDS,
         history_ttl: float = HISTORY_TTL_SECONDS,
+        earnings_ttl: float = EARNINGS_TTL_SECONDS,
         clock=time.monotonic,
     ):
         self.client = client
         self.scanner = scanner
+        self._finnhub = finnhub_client
         self._quote_cache: _TTLSingleflightCache[PriceQuote] = _TTLSingleflightCache(
             quote_ttl, clock=clock
         )
@@ -205,6 +217,9 @@ class MarketData:
         )
         self._history_cache: _TTLSingleflightCache[HistoryFrame] = (
             _TTLSingleflightCache(history_ttl, clock=clock)
+        )
+        self._earnings_cache: _TTLSingleflightCache[list] = _TTLSingleflightCache(
+            earnings_ttl, clock=clock
         )
 
     # -- quotes -------------------------------------------------------------
@@ -298,6 +313,31 @@ class MarketData:
             raise TickerNotFound(ticker)
         bars = tuple(HistoryBar(**_normalise_bar(b)) for b in raw)
         return HistoryFrame(ticker=ticker, bars=bars)
+
+    # -- earnings calendar --------------------------------------------------
+
+    async def earnings_calendar(self, start: date, end: date) -> list[dict]:
+        """Fetch upcoming earnings events between ``start`` and ``end``.
+
+        Results are cached for 6 hours per (start, end) key. Concurrent
+        callers for the same key share one in-flight request (single-flight).
+        Maps Finnhub failures to :class:`EarningsDateUnknown`.
+        """
+        key = ("earnings_calendar", start.isoformat(), end.isoformat())
+        return await self._earnings_cache.get_or_fetch(
+            key, lambda: self._fetch_earnings_calendar(start, end)
+        )
+
+    async def _fetch_earnings_calendar(self, start: date, end: date) -> list[dict]:
+        if self._finnhub is None:
+            raise EarningsDateUnknown(
+                "FinnhubClient not configured — set FINNHUB_API_KEY"
+            )
+        try:
+            events = await self._finnhub.get_earnings_calendar(start, end)
+        except Exception as exc:  # noqa: BLE001
+            raise EarningsDateUnknown(str(exc)) from exc
+        return events
 
     # -- helpers ------------------------------------------------------------
 

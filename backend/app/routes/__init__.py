@@ -6,6 +6,7 @@ from app.routes.alerts import router as alerts_router
 from app.routes.internal import router as internal_router
 from app.routes.dashboard import router as dashboard_router
 from app.routes.portfolio import router as portfolio_router
+from app.routes.earnings import router as earnings_router
 
 __all__ = [
     "watchlist_router",
@@ -16,4 +17,5 @@ __all__ = [
     "internal_router",
     "dashboard_router",
     "portfolio_router",
+    "earnings_router",
 ]

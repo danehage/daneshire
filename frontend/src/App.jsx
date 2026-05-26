@@ -7,6 +7,7 @@ import TickerDetailPage from "./pages/TickerDetailPage";
 import AlertsPage from "./pages/AlertsPage";
 import JournalPage from "./pages/JournalPage";
 import PortfolioPage from "./pages/PortfolioPage";
+import EarningsPage from "./pages/EarningsPage";
 
 function App() {
   return (
@@ -17,6 +18,7 @@ function App() {
           <Route path="/watchlist" element={<WatchlistPage />} />
           <Route path="/scanner" element={<ScannerPage />} />
           <Route path="/ticker/:symbol" element={<TickerDetailPage />} />
+          <Route path="/earnings" element={<EarningsPage />} />
           <Route path="/alerts" element={<AlertsPage />} />
           <Route path="/journal" element={<JournalPage />} />
           <Route path="/portfolio" element={<PortfolioPage />} />

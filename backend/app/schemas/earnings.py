@@ -22,3 +22,10 @@ class CalendarRefreshSummary(BaseModel):
     upserted: int
     start: date
     end: date
+
+
+class IVSnapshotRefreshSummary(BaseModel):
+    snapshot_date: date
+    written: int
+    skipped_no_data: list[str]
+    skipped_rejected_move: list[str]

@@ -25,6 +25,7 @@ from typing import Any, Generic, Optional, TypeVar
 
 from fastapi import Request
 
+from app.schemas.iv import IVSnapshotRaw
 from app.schemas.market import HistoryBar, HistoryFrame, PriceQuote, TechnicalAnalysis
 from app.services.fmp_client import FMPClient
 from app.services.scanner import StockScanner
@@ -68,6 +69,14 @@ class EarningsDateUnknown(MarketDataError):
 
     def __init__(self, message: str = ""):
         super().__init__("", message or "EarningsDateUnknown")
+
+
+class OptionsDataUnavailable(MarketDataError):
+    """Tastytrade has no usable options data for this ticker today.
+
+    Causes: missing chain, missing underlying quote, no front-week
+    expiry, stale/zero straddle quotes, or no remember-token provisioned.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +194,7 @@ QUOTE_TTL_SECONDS = 10.0
 ANALYSIS_TTL_SECONDS = 5 * 60.0
 HISTORY_TTL_SECONDS = 60 * 60.0
 EARNINGS_TTL_SECONDS = 6 * 60 * 60.0  # 6 hours
+IV_TTL_SECONDS = 60 * 60.0  # 1 hour, per ADR-0002
 
 
 class MarketData:
@@ -199,16 +209,19 @@ class MarketData:
         client: FMPClient,
         scanner: StockScanner,
         finnhub_client=None,
+        tastytrade_client=None,
         *,
         quote_ttl: float = QUOTE_TTL_SECONDS,
         analysis_ttl: float = ANALYSIS_TTL_SECONDS,
         history_ttl: float = HISTORY_TTL_SECONDS,
         earnings_ttl: float = EARNINGS_TTL_SECONDS,
+        iv_ttl: float = IV_TTL_SECONDS,
         clock=time.monotonic,
     ):
         self.client = client
         self.scanner = scanner
         self._finnhub = finnhub_client
+        self._tastytrade = tastytrade_client
         self._quote_cache: _TTLSingleflightCache[PriceQuote] = _TTLSingleflightCache(
             quote_ttl, clock=clock
         )
@@ -220,6 +233,9 @@ class MarketData:
         )
         self._earnings_cache: _TTLSingleflightCache[list] = _TTLSingleflightCache(
             earnings_ttl, clock=clock
+        )
+        self._iv_cache: _TTLSingleflightCache[IVSnapshotRaw] = _TTLSingleflightCache(
+            iv_ttl, clock=clock
         )
 
     # -- quotes -------------------------------------------------------------
@@ -338,6 +354,51 @@ class MarketData:
         except Exception as exc:  # noqa: BLE001
             raise EarningsDateUnknown(str(exc)) from exc
         return events
+
+    # -- iv snapshots -------------------------------------------------------
+
+    async def iv_snapshot(self, ticker: str) -> IVSnapshotRaw:
+        """Fetch today's IV snapshot for ``ticker``.
+
+        Raises :class:`OptionsDataUnavailable` if no client is configured
+        or the client cannot price a usable snapshot. 1 hour TTL +
+        single-flight per ADR-0002.
+        """
+        symbol = ticker.upper()
+        return await self._iv_cache.get_or_fetch(
+            ("iv_snapshot", symbol), lambda: self._fetch_iv_snapshot(symbol)
+        )
+
+    async def _fetch_iv_snapshot(self, ticker: str) -> IVSnapshotRaw:
+        if self._tastytrade is None:
+            raise OptionsDataUnavailable(
+                ticker, "TastytradeClient not configured — set TASTYTRADE_REMEMBER_TOKEN"
+            )
+        try:
+            return await self._tastytrade.get_iv_snapshot(ticker)
+        except MarketDataError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise OptionsDataUnavailable(ticker, str(exc)) from exc
+
+    async def iv_snapshots(
+        self, tickers: list[str]
+    ) -> dict[str, IVSnapshotRaw | MarketDataError]:
+        """Per-ticker IV snapshots; errors returned, not raised."""
+        symbols = [t.upper() for t in tickers]
+        unique: list[str] = []
+        seen: set[str] = set()
+        for s in symbols:
+            if s not in seen:
+                seen.add(s)
+                unique.append(s)
+
+        results: dict[str, IVSnapshotRaw | MarketDataError] = {}
+        await asyncio.gather(
+            *[self._gather_one(s, self.iv_snapshot, results) for s in unique],
+            return_exceptions=False,
+        )
+        return results
 
     # -- helpers ------------------------------------------------------------
 

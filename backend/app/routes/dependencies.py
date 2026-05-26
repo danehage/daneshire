@@ -9,6 +9,7 @@ from app.database import get_db
 from app.models.watchlist import WatchlistItem
 from app.services.alert_engine import AlertEngine
 from app.services.market import MarketData, get_market
+from app.services.portfolio_engine import PortfolioEngine
 
 
 def get_alert_engine(
@@ -22,6 +23,18 @@ def get_alert_engine(
     ``app.dependency_overrides[get_alert_engine]``.
     """
     return AlertEngine(db=db, market=market)
+
+
+def get_portfolio_engine(
+    db: AsyncSession = Depends(get_db),
+    market: MarketData = Depends(get_market),
+) -> PortfolioEngine:
+    """Construct a :class:`PortfolioEngine` wired to the request-scoped DB
+    session and the singleton :class:`MarketData` seam.
+
+    Tests substitute via ``app.dependency_overrides[get_portfolio_engine]``.
+    """
+    return PortfolioEngine(db=db, market=market)
 
 
 async def load_watchlist_item(

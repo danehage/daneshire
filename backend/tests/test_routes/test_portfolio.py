@@ -1,4 +1,9 @@
-"""Tests for portfolio API routes."""
+"""Tests for portfolio API routes.
+
+Updated to assert the new PortfolioValueResponse shape from GET /api/portfolio.
+``_NullMarket`` (wired in conftest.py) returns {} for quotes, so market_value
+is null on all positions in these tests — that is expected and tested.
+"""
 
 import pytest
 from datetime import datetime, timezone
@@ -51,6 +56,11 @@ SNAPSHOT_PAYLOAD = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Snapshot commit tests (unchanged from #7)
+# ---------------------------------------------------------------------------
+
+
 @pytest.mark.asyncio
 async def test_commit_snapshot_creates_account(client: AsyncClient):
     """Committing a snapshot with an unknown account lazily creates the Account row."""
@@ -98,12 +108,16 @@ async def test_list_accounts(client: AsyncClient):
     assert "Roth IRA" in names
 
 
+# ---------------------------------------------------------------------------
+# GET /api/portfolio — new PortfolioValueResponse shape
+# ---------------------------------------------------------------------------
+
+
 @pytest.mark.asyncio
-async def test_get_portfolio_returns_latest_snapshot_holdings(client: AsyncClient):
-    """GET /api/portfolio returns holdings from the most recent snapshot."""
+async def test_get_portfolio_returns_latest_snapshot_positions(client: AsyncClient):
+    """GET /api/portfolio?account_id=… returns holdings from the most recent snapshot."""
     await client.post("/api/portfolio/snapshots/commit", json=SNAPSHOT_PAYLOAD)
 
-    # Second snapshot with different positions
     later_payload = {
         "account_name": "Taxable",
         "captured_at": "2026-05-22T12:00:00Z",
@@ -119,54 +133,63 @@ async def test_get_portfolio_returns_latest_snapshot_holdings(client: AsyncClien
     }
     await client.post("/api/portfolio/snapshots/commit", json=later_payload)
 
-    # Get account_id
     accounts = (await client.get("/api/portfolio/accounts")).json()
     account_id = accounts[0]["id"]
 
     response = await client.get(f"/api/portfolio?account_id={account_id}")
     assert response.status_code == 200
-    tickers = [h["ticker"] for h in response.json()]
+    data = response.json()
+
+    # New shape: positions key
+    assert "positions" in data
+    assert "total_value" in data
+    assert "day_change" in data
+    assert "last_snapshot_at" in data
+    tickers = [p["ticker"] for p in data["positions"]]
     # Only NVDA from the latest snapshot
     assert tickers == ["NVDA"]
 
 
 @pytest.mark.asyncio
 async def test_get_portfolio_empty_account(client: AsyncClient):
-    """GET /api/portfolio with no snapshots returns empty list."""
-    # Create account directly via a commit, then use a different account_id
-    await client.post("/api/portfolio/snapshots/commit", json=SNAPSHOT_PAYLOAD)
-
+    """GET /api/portfolio with no snapshots returns empty positions."""
     fake_id = "00000000-0000-0000-0000-000000000000"
     response = await client.get(f"/api/portfolio?account_id={fake_id}")
     assert response.status_code == 200
-    assert response.json() == []
+    data = response.json()
+    assert data["positions"] == []
+    assert Decimal(data["total_value"]) == Decimal(0)
 
 
 @pytest.mark.asyncio
-async def test_get_portfolio_no_account_id_aggregates(client: AsyncClient):
-    """GET /api/portfolio with no account_id returns holdings from all accounts' latest snapshots."""
+async def test_get_portfolio_no_account_id_returns_empty(client: AsyncClient):
+    """GET /api/portfolio with no account_id returns an empty PortfolioValueResponse."""
+    # Commit a snapshot so there is data in the DB
     await client.post("/api/portfolio/snapshots/commit", json=SNAPSHOT_PAYLOAD)
-    second = {
-        "account_name": "Roth IRA",
-        "captured_at": "2026-05-21T12:00:00Z",
-        "positions": [
-            {
-                "instrument_type": "equity",
-                "ticker": "GOOGL",
-                "qty": "2",
-                "avg_cost": "170.00",
-                "market_value_at_snapshot": "350.00",
-            }
-        ],
-    }
-    await client.post("/api/portfolio/snapshots/commit", json=second)
 
     response = await client.get("/api/portfolio")
     assert response.status_code == 200
-    tickers = {h["ticker"] for h in response.json()}
-    assert "AAPL" in tickers
-    assert "MSFT" in tickers
-    assert "GOOGL" in tickers
+    data = response.json()
+    assert data["account_id"] is None
+    assert data["positions"] == []
+    assert Decimal(data["total_value"]) == Decimal(0)
+
+
+@pytest.mark.asyncio
+async def test_get_portfolio_positions_have_null_market_value(client: AsyncClient):
+    """Positions have null market_value when the market returns no quotes (NullMarket)."""
+    await client.post("/api/portfolio/snapshots/commit", json=SNAPSHOT_PAYLOAD)
+    accounts = (await client.get("/api/portfolio/accounts")).json()
+    account_id = accounts[0]["id"]
+
+    response = await client.get(f"/api/portfolio?account_id={account_id}")
+    assert response.status_code == 200
+    data = response.json()
+
+    for pos in data["positions"]:
+        # _NullMarket returns {} for quotes — market_value is null
+        assert pos["market_value"] is None
+        assert pos["day_change"] is None
 
 
 @pytest.mark.asyncio
@@ -192,11 +215,14 @@ async def test_multiple_accounts_isolated(client: AsyncClient):
     taxable = next(a for a in accounts if a["name"] == "Taxable")
     roth = next(a for a in accounts if a["name"] == "Roth IRA")
 
-    taxable_holdings = (await client.get(f"/api/portfolio?account_id={taxable['id']}")).json()
-    roth_holdings = (await client.get(f"/api/portfolio?account_id={roth['id']}")).json()
+    taxable_data = (await client.get(f"/api/portfolio?account_id={taxable['id']}")).json()
+    roth_data = (await client.get(f"/api/portfolio?account_id={roth['id']}")).json()
 
-    assert all(h["ticker"] in {"AAPL", "MSFT"} for h in taxable_holdings)
-    assert all(h["ticker"] == "GOOGL" for h in roth_holdings)
+    taxable_tickers = {p["ticker"] for p in taxable_data["positions"]}
+    roth_tickers = {p["ticker"] for p in roth_data["positions"]}
+
+    assert taxable_tickers == {"AAPL", "MSFT"}
+    assert roth_tickers == {"GOOGL"}
 
 
 @pytest.mark.asyncio

@@ -43,6 +43,9 @@ export default function EarningsPage() {
   const [endDate, setEndDate] = useState(end);
   const [sortField, setSortField] = useState('report_date');
   const [sortDir, setSortDir] = useState('asc');
+  // Secondary sort: when the user is sorting by the default field
+  // (`report_date`), break ties by IV rank desc (PRD §3 default).
+  const SECONDARY_FIELD = 'latest_iv_rank';
 
   const { data: events = [], isLoading, isError, error } = useEarningsCalendar({
     start: startDate,
@@ -58,13 +61,38 @@ export default function EarningsPage() {
     }
   }
 
+  function compare(a, b, field, dir) {
+    const rawA = a[field];
+    const rawB = b[field];
+    // Nulls always sort last regardless of direction.
+    const aMissing = rawA === null || rawA === undefined || rawA === '';
+    const bMissing = rawB === null || rawB === undefined || rawB === '';
+    if (aMissing && bMissing) return 0;
+    if (aMissing) return 1;
+    if (bMissing) return -1;
+
+    let valA = rawA;
+    let valB = rawB;
+    // IV / move are decimal strings off the wire — compare as numbers.
+    if (field === 'latest_iv_rank' || field === 'latest_expected_move_pct') {
+      valA = Number(valA);
+      valB = Number(valB);
+    } else if (typeof valA === 'string') {
+      valA = valA.toLowerCase();
+      valB = valB.toLowerCase();
+    }
+    if (valA < valB) return dir === 'asc' ? -1 : 1;
+    if (valA > valB) return dir === 'asc' ? 1 : -1;
+    return 0;
+  }
+
   const sorted = [...events].sort((a, b) => {
-    let valA = a[sortField] ?? '';
-    let valB = b[sortField] ?? '';
-    if (typeof valA === 'string') valA = valA.toLowerCase();
-    if (typeof valB === 'string') valB = valB.toLowerCase();
-    if (valA < valB) return sortDir === 'asc' ? -1 : 1;
-    if (valA > valB) return sortDir === 'asc' ? 1 : -1;
+    const primary = compare(a, b, sortField, sortDir);
+    if (primary !== 0) return primary;
+    if (sortField === 'report_date') {
+      // Tie-break by IV rank desc.
+      return compare(a, b, SECONDARY_FIELD, 'desc');
+    }
     return 0;
   });
 
@@ -161,6 +189,24 @@ export default function EarningsPage() {
                     onSort={handleSort}
                   />
                 </th>
+                <th className="px-4 py-3 text-right">
+                  <SortButton
+                    label="IV Rank"
+                    field="latest_iv_rank"
+                    sortField={sortField}
+                    sortDir={sortDir}
+                    onSort={handleSort}
+                  />
+                </th>
+                <th className="px-4 py-3 text-right">
+                  <SortButton
+                    label="Exp Move %"
+                    field="latest_expected_move_pct"
+                    sortField={sortField}
+                    sortDir={sortDir}
+                    onSort={handleSort}
+                  />
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -189,6 +235,17 @@ export default function EarningsPage() {
                   </td>
                   <td className="px-4 py-3 text-mid-brown">
                     {event.fiscal_period || '—'}
+                  </td>
+                  <td className="px-4 py-3 text-right font-mono text-ink">
+                    {event.latest_iv_rank !== null && event.latest_iv_rank !== undefined
+                      ? Number(event.latest_iv_rank).toFixed(1)
+                      : '—'}
+                  </td>
+                  <td className="px-4 py-3 text-right font-mono text-ink">
+                    {event.latest_expected_move_pct !== null &&
+                    event.latest_expected_move_pct !== undefined
+                      ? `${(Number(event.latest_expected_move_pct) * 100).toFixed(2)}%`
+                      : '—'}
                   </td>
                 </tr>
               ))}

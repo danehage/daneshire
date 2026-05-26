@@ -108,8 +108,10 @@ from app.routes import (
     alerts_router,
     internal_router,
     dashboard_router,
+    earnings_router,
 )
 from app.services.fmp_client import FMPClient
+from app.services.finnhub_client import FinnhubClient
 from app.services.market import MarketData
 from app.services.scanner import StockScanner
 
@@ -121,7 +123,13 @@ async def lifespan(app: FastAPI):
     # via Depends(get_market). See CONTEXT.md § Market Data.
     fmp = FMPClient()
     scanner = StockScanner(client=fmp)
-    app.state.market = MarketData(fmp, scanner)
+    # FinnhubClient is optional — app starts cleanly without the key; the
+    # earnings endpoints will return 502 until the key is configured.
+    try:
+        finnhub = FinnhubClient()
+    except ValueError:
+        finnhub = None
+    app.state.market = MarketData(fmp, scanner, finnhub)
     yield
     # Shutdown
 
@@ -153,6 +161,7 @@ app.include_router(scanner_router)
 app.include_router(alerts_router)
 app.include_router(internal_router)
 app.include_router(dashboard_router)
+app.include_router(earnings_router)
 
 
 @app.get("/api/health")

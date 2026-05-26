@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     # Market data
     fmp_api_key: str = ""
     finnhub_api_key: str = ""
+    tastytrade_remember_token: str = ""
 
     # Notifications
     pushover_user_key: str = ""

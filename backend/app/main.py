@@ -115,6 +115,7 @@ from app.services.fmp_client import FMPClient
 from app.services.finnhub_client import FinnhubClient
 from app.services.market import MarketData
 from app.services.scanner import StockScanner
+from app.services.tastytrade_client import TastytradeClient
 
 
 @asynccontextmanager
@@ -130,9 +131,18 @@ async def lifespan(app: FastAPI):
         finnhub = FinnhubClient()
     except ValueError:
         finnhub = None
-    app.state.market = MarketData(fmp, scanner, finnhub)
+    # TastytradeClient is optional — app starts cleanly without the
+    # remember-token; the IV refresh endpoint will return 502 until the
+    # token is provisioned.
+    try:
+        tastytrade = TastytradeClient()
+    except ValueError:
+        tastytrade = None
+    app.state.market = MarketData(fmp, scanner, finnhub, tastytrade)
     yield
     # Shutdown
+    if tastytrade is not None:
+        await tastytrade.aclose()
 
 
 app = FastAPI(

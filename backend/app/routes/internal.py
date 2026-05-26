@@ -17,15 +17,27 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from decimal import Decimal
+
+from sqlalchemy import func, select
+
 from app.config import settings
 from app.database import get_db
 from app.models.earnings import EarningsEvent
+from app.models.iv_snapshots import IVSnapshot
+from app.models.watchlist import WatchlistItem
 from app.routes.dependencies import get_alert_engine
 from app.schemas.alert_runs import RunSummary
-from app.schemas.earnings import CalendarRefreshSummary
+from app.schemas.earnings import CalendarRefreshSummary, IVSnapshotRefreshSummary
+from app.schemas.iv import IVSnapshotRaw
 from app.services.alert_engine import AlertEngine
-from app.services.market import MarketData, EarningsDateUnknown, get_market
+from app.services.market import MarketData, EarningsDateUnknown, MarketDataError, get_market
 from app.services.notifications import PushoverClient
+
+
+# Per ADR-0004, the cutover from provider IV-rank to self-computed
+# happens when this many prior rows exist for a ticker.
+_IV_RANK_CUTOVER_ROWS = 252
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +159,128 @@ async def refresh_earnings_calendar(
     await db.commit()
     logger.info("refresh-calendar: upserted %d events (%s → %s)", upserted, today, end)
     return CalendarRefreshSummary(upserted=upserted, start=today, end=end)
+
+
+@router.post("/earnings/refresh-snapshots", response_model=IVSnapshotRefreshSummary)
+async def refresh_iv_snapshots(
+    market: MarketData = Depends(get_market),
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(verify_scheduler_secret),
+):
+    """Write today's `iv_snapshots` row for every watchlist ticker tagged
+    `earnings-candidate`.
+
+    Skips tickers with no data (no chain / no quote / no token) and
+    tickers whose front-week straddle could not be priced (ADR-0003).
+    Per-ticker IV-rank source follows ADR-0004: provider value while
+    prior rows < 252; self-computed thereafter.
+    """
+    today = date.today()
+
+    # Pick up every watchlist item carrying the earnings-candidate tag.
+    stmt = select(WatchlistItem.ticker).where(WatchlistItem.tags.any("earnings-candidate"))
+    rows = (await db.execute(stmt)).scalars().all()
+    tickers = sorted({(t or "").strip().upper() for t in rows if t})
+    if not tickers:
+        return IVSnapshotRefreshSummary(
+            snapshot_date=today,
+            written=0,
+            skipped_no_data=[],
+            skipped_rejected_move=[],
+        )
+
+    snapshots = await market.iv_snapshots(tickers)
+
+    written = 0
+    skipped_no_data: list[str] = []
+    skipped_rejected_move: list[str] = []
+
+    for ticker in tickers:
+        result = snapshots.get(ticker)
+        if isinstance(result, MarketDataError):
+            skipped_no_data.append(ticker)
+            continue
+        if not isinstance(result, IVSnapshotRaw):  # defensive
+            skipped_no_data.append(ticker)
+            continue
+        if result.expected_move_pct is None:
+            skipped_rejected_move.append(ticker)
+            continue
+
+        iv_rank, source = await _resolve_iv_rank(db, ticker, result)
+
+        stmt = (
+            pg_insert(IVSnapshot)
+            .values(
+                ticker=ticker,
+                snapshot_date=today,
+                iv30=result.iv30,
+                iv_rank=iv_rank,
+                expected_move_pct=result.expected_move_pct,
+                source=source,
+            )
+            .on_conflict_do_nothing(constraint="uq_iv_snapshots_ticker_date")
+        )
+        await db.execute(stmt)
+        written += 1
+
+    await db.commit()
+    logger.info(
+        "refresh-snapshots: wrote %d, no-data %d, rejected %d",
+        written,
+        len(skipped_no_data),
+        len(skipped_rejected_move),
+    )
+    return IVSnapshotRefreshSummary(
+        snapshot_date=today,
+        written=written,
+        skipped_no_data=skipped_no_data,
+        skipped_rejected_move=skipped_rejected_move,
+    )
+
+
+async def _resolve_iv_rank(
+    db: AsyncSession, ticker: str, raw: IVSnapshotRaw
+) -> tuple[Decimal, str]:
+    """Pick the IV-rank source per ADR-0004.
+
+    < 252 prior rows → provider value, ``source='tastytrade'``.
+    ≥ 252 prior rows → self-computed from min/max(iv30) over the most
+    recent 252 rows, clamped to [0, 100], ``source='self_252d'``.
+    """
+    count_stmt = select(func.count()).select_from(IVSnapshot).where(
+        IVSnapshot.ticker == ticker
+    )
+    row_count = int((await db.execute(count_stmt)).scalar() or 0)
+
+    if row_count < _IV_RANK_CUTOVER_ROWS:
+        return raw.iv_rank_provider, "tastytrade"
+
+    recent = (
+        select(IVSnapshot.iv30)
+        .where(IVSnapshot.ticker == ticker)
+        .order_by(IVSnapshot.snapshot_date.desc())
+        .limit(_IV_RANK_CUTOVER_ROWS)
+        .subquery()
+    )
+    bounds_stmt = select(
+        func.min(recent.c.iv30).label("min_iv"),
+        func.max(recent.c.iv30).label("max_iv"),
+    )
+    bounds = (await db.execute(bounds_stmt)).one()
+    min_iv = bounds.min_iv
+    max_iv = bounds.max_iv
+    if min_iv is None or max_iv is None or max_iv == min_iv:
+        # Degenerate range — fall back to provider value rather than
+        # writing a meaningless 0 or 100.
+        return raw.iv_rank_provider, "tastytrade"
+
+    rank = (raw.iv30 - min_iv) / (max_iv - min_iv) * Decimal(100)
+    if rank < 0:
+        rank = Decimal(0)
+    elif rank > 100:
+        rank = Decimal(100)
+    return rank, "self_252d"
 
 
 @router.get("/health")

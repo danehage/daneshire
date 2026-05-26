@@ -19,6 +19,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.main import app
 from app.models.alert import Alert, AlertHistory
+from app.models.earnings import EarningsEvent
+from app.models.iv_snapshots import IVSnapshot
 from app.routes.dependencies import get_alert_engine
 from app.schemas.alert_conditions import Condition, Met
 from app.schemas.market import PriceQuote, TechnicalAnalysis
@@ -43,10 +45,14 @@ async def cleanup_alerts(db_session: AsyncSession):
     """Clean up test alerts before and after each test."""
     await db_session.execute(delete(AlertHistory))
     await db_session.execute(delete(Alert))
+    await db_session.execute(delete(IVSnapshot))
+    await db_session.execute(delete(EarningsEvent))
     await db_session.commit()
     yield
     await db_session.execute(delete(AlertHistory))
     await db_session.execute(delete(Alert))
+    await db_session.execute(delete(IVSnapshot))
+    await db_session.execute(delete(EarningsEvent))
     await db_session.commit()
 
 
@@ -236,6 +242,66 @@ async def test_run_reminders_no_alerts(client: AsyncClient):
     data = response.json()
     assert data["alert_type"] == "date_reminder"
     assert data["met"] == 0
+
+
+@pytest.mark.asyncio
+async def test_run_earnings_checks_no_alerts(client: AsyncClient):
+    response = await client.post(
+        "/api/internal/alerts/run-earnings-checks", headers=auth_headers()
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["alert_type"] == "earnings_iv"
+    assert data["met"] == 0
+
+
+@pytest.mark.asyncio
+async def test_run_earnings_checks_iv_above_threshold(
+    client: AsyncClient, db_session: AsyncSession
+):
+    """Earnings-IV check fires when iv_rank >= threshold inside the
+    days_before window, sourced from the latest IVSnapshot + next future
+    EarningsEvent."""
+    from datetime import date, timedelta
+    from decimal import Decimal
+
+    today = date.today()
+    db_session.add(
+        EarningsEvent(
+            ticker="NVDA",
+            report_date=today + timedelta(days=3),
+            report_time="amc",
+        )
+    )
+    db_session.add(
+        IVSnapshot(
+            ticker="NVDA",
+            snapshot_date=today,
+            iv30=Decimal("0.45"),
+            iv_rank=Decimal("72.5"),
+            expected_move_pct=Decimal("0.06"),
+            source="self_252d",
+        )
+    )
+    await db_session.commit()
+
+    await client.post(
+        "/api/alerts",
+        json={
+            "ticker": "NVDA",
+            "name": "NVDA earnings IV elevated",
+            "alert_type": "earnings_iv",
+            "condition": {"value": 60.0, "days_before": 5, "operator": ">="},
+        },
+    )
+
+    response = await client.post(
+        "/api/internal/alerts/run-earnings-checks", headers=auth_headers()
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["alert_type"] == "earnings_iv"
+    assert data["met"] == 1
 
 
 # ---------------------------------------------------------------------------

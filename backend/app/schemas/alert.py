@@ -17,7 +17,7 @@ from app.schemas.alert_conditions import condition_from_payload
 
 AlertType = Literal[
     "price_cross",
-    "earnings_check",
+    "earnings_iv",
     "date_reminder",
     "technical_signal",
     "custom",

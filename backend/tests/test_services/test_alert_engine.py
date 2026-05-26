@@ -22,8 +22,12 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.alert import Alert, AlertHistory
+from app.models.earnings import EarningsEvent
+from app.models.iv_snapshots import IVSnapshot
 from app.schemas.alert_conditions import (
     Condition,
+    EarningsExpectedMoveCondition,
+    EarningsIVObservation,
     Errored,
     Met,
     NotMet,
@@ -376,30 +380,165 @@ async def test_run_date_reminder_other_day_not_met(db_session: AsyncSession):
     assert summary.notifications_sent == 0
 
 
+class TestEarningsExpectedMoveCondition:
+    """Pure evaluator tests for the new earnings_iv variant (issue #18)."""
+
+    def _cond(self, **overrides):
+        defaults = {"value": 60.0, "days_before": 5, "operator": ">="}
+        defaults.update(overrides)
+        return EarningsExpectedMoveCondition(**defaults)
+
+    def test_met_inside_window_above_threshold(self):
+        cond = self._cond()
+        obs = EarningsIVObservation(iv_rank=72.0, days_until_earnings=3)
+        result = cond.evaluate(obs)
+        assert isinstance(result, Met)
+        assert result.actual_value == 72.0
+
+    def test_not_met_inside_window_below_threshold(self):
+        cond = self._cond()
+        obs = EarningsIVObservation(iv_rank=40.0, days_until_earnings=3)
+        result = cond.evaluate(obs)
+        assert isinstance(result, NotMet)
+        assert result.actual_value == 40.0
+
+    def test_threshold_boundary_is_met_with_ge(self):
+        cond = self._cond(value=60.0, operator=">=")
+        obs = EarningsIVObservation(iv_rank=60.0, days_until_earnings=2)
+        assert isinstance(cond.evaluate(obs), Met)
+
+    def test_threshold_boundary_is_not_met_with_strict_gt(self):
+        cond = self._cond(value=60.0, operator=">")
+        obs = EarningsIVObservation(iv_rank=60.0, days_until_earnings=2)
+        assert isinstance(cond.evaluate(obs), NotMet)
+
+    def test_outside_window_is_not_met(self):
+        # Plenty of IV but earnings still 10 days away — outside 5-day window.
+        cond = self._cond(days_before=5)
+        obs = EarningsIVObservation(iv_rank=90.0, days_until_earnings=10)
+        assert isinstance(cond.evaluate(obs), NotMet)
+
+    def test_window_boundary_day_fires(self):
+        # Exactly days_before from earnings should fire.
+        cond = self._cond(days_before=5)
+        obs = EarningsIVObservation(iv_rank=80.0, days_until_earnings=5)
+        assert isinstance(cond.evaluate(obs), Met)
+
+    def test_day_of_earnings_fires(self):
+        cond = self._cond()
+        obs = EarningsIVObservation(iv_rank=80.0, days_until_earnings=0)
+        assert isinstance(cond.evaluate(obs), Met)
+
+    def test_past_earnings_not_met(self):
+        cond = self._cond()
+        obs = EarningsIVObservation(iv_rank=80.0, days_until_earnings=-1)
+        assert isinstance(cond.evaluate(obs), NotMet)
+
+    def test_missing_iv_rank_not_met(self):
+        cond = self._cond()
+        obs = EarningsIVObservation(iv_rank=None, days_until_earnings=3)
+        result = cond.evaluate(obs)
+        assert isinstance(result, NotMet)
+        assert result.actual_value is None
+
+    def test_missing_earnings_event_not_met(self):
+        cond = self._cond()
+        obs = EarningsIVObservation(iv_rank=80.0, days_until_earnings=None)
+        result = cond.evaluate(obs)
+        assert isinstance(result, NotMet)
+        assert result.actual_value is None
+
+    def test_format(self):
+        cond = self._cond(value=55.0, days_before=7, operator=">=")
+        assert cond.format() == "iv_rank >= 55.0 within 7d of earnings"
+
+    def test_iv_rank_threshold_out_of_bounds_rejected(self):
+        with pytest.raises(Exception):
+            EarningsExpectedMoveCondition(value=150.0, days_before=5)
+
+    def test_negative_days_before_rejected(self):
+        with pytest.raises(Exception):
+            EarningsExpectedMoveCondition(value=60.0, days_before=-1)
+
+
 @pytest.mark.asyncio
-async def test_run_earnings_check_is_errored_not_yet_implemented(
+async def test_run_earnings_iv_met_records_and_notifies(
     db_session: AsyncSession,
 ):
-    await _insert_alert(
+    today = datetime.now(timezone.utc).date()
+    # Earnings 3 days out, snapshot says iv_rank=75 — threshold 60.
+    db_session.add(
+        EarningsEvent(
+            ticker="AAPL",
+            report_date=today + timedelta(days=3),
+            report_time="amc",
+            source="finnhub",
+        )
+    )
+    db_session.add(
+        IVSnapshot(
+            ticker="AAPL",
+            snapshot_date=today,
+            iv30="0.35",
+            iv_rank="75.0",
+            expected_move_pct="0.045",
+            source="tastytrade",
+        )
+    )
+    await db_session.commit()
+
+    alert = await _insert_alert(
         db_session,
         ticker="AAPL",
-        alert_type="earnings_check",
-        condition={
-            "metric": "eps",
-            "operator": ">",
-            "value": 4.0,
-            "trigger_date": "2026-06-01",
-        },
+        alert_type="earnings_iv",
+        condition={"value": 60.0, "days_before": 5, "operator": ">="},
     )
-    engine = AlertEngine(
-        db_session, market=FakeMarket(), notifier=RecordingNotifier()
+    notifier = RecordingNotifier()
+    engine = AlertEngine(db_session, market=FakeMarket(), notifier=notifier)
+
+    summary = await engine.run("earnings_iv")
+
+    assert summary.met == 1
+    assert summary.notifications_sent == 1
+    history = (
+        await db_session.execute(
+            select(AlertHistory).where(AlertHistory.alert_id == alert.id)
+        )
+    ).scalars().all()
+    assert len(history) == 1
+    assert history[0].condition_met is True
+
+    await db_session.execute(delete(IVSnapshot))
+    await db_session.execute(delete(EarningsEvent))
+    await db_session.commit()
+
+
+@pytest.mark.asyncio
+async def test_run_earnings_iv_missing_data_logs_not_met(
+    db_session: AsyncSession,
+):
+    """No snapshot + no upcoming event → NotMet (logged) but no notification."""
+    alert = await _insert_alert(
+        db_session,
+        ticker="GOOG",
+        alert_type="earnings_iv",
+        condition={"value": 60.0, "days_before": 5, "operator": ">="},
     )
+    notifier = RecordingNotifier()
+    engine = AlertEngine(db_session, market=FakeMarket(), notifier=notifier)
 
-    summary = await engine.run("earnings_check")
+    summary = await engine.run("earnings_iv")
 
-    assert summary.errored == 1
-    assert summary.outcomes[0].status == "errored"
-    assert "not yet implemented" in summary.outcomes[0].reason
+    assert summary.met == 0
+    assert summary.not_met == 1
+    assert summary.notifications_sent == 0
+    history = (
+        await db_session.execute(
+            select(AlertHistory).where(AlertHistory.alert_id == alert.id)
+        )
+    ).scalars().all()
+    assert len(history) == 1
+    assert history[0].condition_met is False
 
 
 @pytest.mark.asyncio

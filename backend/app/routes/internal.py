@@ -88,6 +88,15 @@ async def run_reminders(
     return await engine.run("date_reminder")
 
 
+@router.post("/alerts/run-earnings-checks", response_model=RunSummary)
+async def run_earnings_checks(
+    engine: AlertEngine = Depends(get_alert_engine),
+    _: None = Depends(verify_scheduler_secret),
+):
+    """Evaluate all active ``earnings_iv`` alerts."""
+    return await engine.run("earnings_iv")
+
+
 @router.post("/alerts/expire-stale")
 async def expire_stale_alerts(
     engine: AlertEngine = Depends(get_alert_engine),

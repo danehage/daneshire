@@ -157,34 +157,50 @@ class TechnicalCondition(_ConditionBase):
         return f"{self.metric} {self.operator} {_format_metric_value(self.metric, self.value)}"
 
 
-class EarningsCondition(_ConditionBase):
-    """EPS comparison around a scheduled earnings date.
+@dataclass(frozen=True)
+class EarningsIVObservation:
+    """Pure observation for ``EarningsExpectedMoveCondition``.
 
-    The evaluator stays pure: it just compares EPS once an observation is
-    supplied. Fetching the earnings record (and gating on ``trigger_date``)
-    is the orchestrator's job. ``trigger_date`` is kept on the condition
-    so :meth:`format` can render it.
-
-    Note: not yet wired into the engine — the orchestrator returns
-    ``Errored("alert_type not yet implemented")`` for ``earnings_check``
-    today. The variant exists so adding the integration later is a
-    contained change.
+    The orchestrator populates both fields from the database — no
+    external I/O. ``None`` on either side means we lack the data
+    needed to evaluate (no snapshot for the ticker, or no upcoming
+    earnings event), and the pure evaluator surfaces that as
+    ``NotMet`` with no recorded value.
     """
 
-    metric: Literal["eps"] = "eps"
-    operator: Operator
-    value: float
-    trigger_date: str = Field(..., description="ISO date the earnings report is due")
+    iv_rank: Optional[float]
+    days_until_earnings: Optional[int]
 
-    def evaluate(self, observation: Any) -> EvalResult:
-        actual = float(getattr(observation, "eps", observation))
-        if _compare(self.operator, actual, self.value):
-            return Met(actual_value=actual)
-        return NotMet(actual_value=actual)
+
+class EarningsExpectedMoveCondition(_ConditionBase):
+    """Fire when an earnings event is approaching AND IV-rank crosses a threshold.
+
+    Concretely: "alert me ``days_before`` days before earnings if
+    ``iv_rank operator value``". The window is inclusive — exactly
+    ``days_before`` days out fires; the day of earnings (0 days) also
+    fires. Past earnings (negative days) never fire.
+    """
+
+    metric: Literal["earnings_iv"] = "earnings_iv"
+    operator: Operator = ">="
+    value: float = Field(..., ge=0, le=100, description="IV-rank threshold (0–100)")
+    days_before: int = Field(..., ge=0, le=60)
+
+    def evaluate(self, observation: EarningsIVObservation) -> EvalResult:
+        if observation.days_until_earnings is None or observation.iv_rank is None:
+            return NotMet(actual_value=None)
+        if observation.days_until_earnings < 0:
+            return NotMet(actual_value=observation.iv_rank)
+        if observation.days_until_earnings > self.days_before:
+            return NotMet(actual_value=observation.iv_rank)
+        if _compare(self.operator, observation.iv_rank, self.value):
+            return Met(actual_value=observation.iv_rank)
+        return NotMet(actual_value=observation.iv_rank)
 
     def format(self) -> str:
         return (
-            f"eps {self.operator} {self.value:.2f} on {self.trigger_date}"
+            f"iv_rank {self.operator} {self.value:.1f} "
+            f"within {self.days_before}d of earnings"
         )
 
 
@@ -230,7 +246,7 @@ class CustomCondition(_ConditionBase):
 Condition = Union[
     PriceCondition,
     TechnicalCondition,
-    EarningsCondition,
+    EarningsExpectedMoveCondition,
     ReminderCondition,
     CustomCondition,
 ]
@@ -247,7 +263,7 @@ Condition = Union[
 _CONDITION_BY_ALERT_TYPE: dict[str, type[Condition]] = {
     "price_cross": PriceCondition,
     "technical_signal": TechnicalCondition,
-    "earnings_check": EarningsCondition,
+    "earnings_iv": EarningsExpectedMoveCondition,
     "date_reminder": ReminderCondition,
     "custom": CustomCondition,
 }

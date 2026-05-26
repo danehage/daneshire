@@ -9,3 +9,52 @@ export async function getEarningsCalendar({ start, end } = {}) {
   if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`);
   return res.json();
 }
+
+// ---------------------------------------------------------------------------
+// Earnings trades CRUD (issue #16)
+// ---------------------------------------------------------------------------
+
+export async function getEarningsTrades({ status, ticker, start, end } = {}) {
+  const params = new URLSearchParams();
+  if (status) params.set('status', status);
+  if (ticker) params.set('ticker', ticker);
+  if (start) params.set('start', start);
+  if (end) params.set('end', end);
+  const query = params.toString() ? `?${params}` : '';
+  const res = await fetch(`${API_BASE}/api/earnings/trades${query}`);
+  if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`);
+  return res.json();
+}
+
+export async function createEarningsTrade(data) {
+  const res = await fetch(`${API_BASE}/api/earnings/trades`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`${res.status}: ${body || res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function updateEarningsTrade(id, patch) {
+  const res = await fetch(`${API_BASE}/api/earnings/trades/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`${res.status}: ${body || res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function deleteEarningsTrade(id) {
+  const res = await fetch(`${API_BASE}/api/earnings/trades/${id}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`);
+}

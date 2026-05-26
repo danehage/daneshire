@@ -4,6 +4,7 @@ from app.models.price_target import PriceTarget
 from app.models.journal import JournalEntry
 from app.models.alert import Alert, AlertHistory
 from app.models.earnings import EarningsEvent
+from app.models.earnings_trades import EarningsTrade
 from app.models.iv_snapshots import IVSnapshot
 
 __all__ = [
@@ -14,5 +15,6 @@ __all__ = [
     "Alert",
     "AlertHistory",
     "EarningsEvent",
+    "EarningsTrade",
     "IVSnapshot",
 ]

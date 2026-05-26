@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useEarningsCalendar } from '../hooks/useEarnings';
+import EarningsTradeForm from '../components/EarningsTradeForm';
+import EarningsTradesList from '../components/EarningsTradesList';
 
 const REPORT_TIME_LABEL = {
   bmo: 'BMO',
@@ -195,6 +197,19 @@ export default function EarningsPage() {
           <p className="text-xs text-mid-brown mt-2">{sorted.length} events</p>
         </div>
       )}
+
+      <div className="mt-10">
+        <h2 className="text-xl font-serif font-bold text-ink mb-1">
+          Earnings trades
+        </h2>
+        <p className="text-sm text-mid-brown mb-4">
+          Log iron condors / butterflies sold against the calendar.
+        </p>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <EarningsTradeForm earningsEvents={events} />
+          <EarningsTradesList />
+        </div>
+      </div>
     </div>
   );
 }

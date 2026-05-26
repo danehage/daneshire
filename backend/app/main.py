@@ -108,6 +108,7 @@ from app.routes import (
     alerts_router,
     internal_router,
     dashboard_router,
+    portfolio_router,
     earnings_router,
 )
 from app.services.fmp_client import FMPClient
@@ -161,6 +162,7 @@ app.include_router(scanner_router)
 app.include_router(alerts_router)
 app.include_router(internal_router)
 app.include_router(dashboard_router)
+app.include_router(portfolio_router)
 app.include_router(earnings_router)
 
 

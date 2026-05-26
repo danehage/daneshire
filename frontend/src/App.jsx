@@ -6,6 +6,7 @@ import ScannerPage from "./pages/ScannerPage";
 import TickerDetailPage from "./pages/TickerDetailPage";
 import AlertsPage from "./pages/AlertsPage";
 import JournalPage from "./pages/JournalPage";
+import PortfolioPage from "./pages/PortfolioPage";
 import EarningsPage from "./pages/EarningsPage";
 
 function App() {
@@ -20,6 +21,7 @@ function App() {
           <Route path="/earnings" element={<EarningsPage />} />
           <Route path="/alerts" element={<AlertsPage />} />
           <Route path="/journal" element={<JournalPage />} />
+          <Route path="/portfolio" element={<PortfolioPage />} />
         </Routes>
       </Layout>
     </BrowserRouter>

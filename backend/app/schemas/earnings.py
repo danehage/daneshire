@@ -16,6 +16,12 @@ class EarningsEventResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
+    # Joined from the most recent iv_snapshots row for this ticker.
+    # Null when no snapshot exists yet (e.g. ticker outside the daily
+    # refresh universe, or refresh hasn't run).
+    latest_iv_rank: Optional[Decimal] = None
+    latest_expected_move_pct: Optional[Decimal] = None
+
     model_config = ConfigDict(from_attributes=True)
 
 

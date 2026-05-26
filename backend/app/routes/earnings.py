@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models.earnings import EarningsEvent
 from app.models.earnings_trades import EarningsTrade
+from app.models.iv_snapshots import IVSnapshot
 from app.schemas.earnings import (
     EarningsEventResponse,
     EarningsTradeCreate,
@@ -53,7 +54,8 @@ async def list_earnings_calendar(
     end: date = Query(default=None),
     db: AsyncSession = Depends(get_db),
 ):
-    """Return earnings events ordered by report_date ASC.
+    """Return earnings events ordered by report_date ASC, joined to the
+    most recent IV snapshot per ticker.
 
     Defaults: start = today, end = today + 28 days.
     """
@@ -61,13 +63,48 @@ async def list_earnings_calendar(
     start = start or today
     end = end or (today + timedelta(days=28))
 
-    result = await db.execute(
-        select(EarningsEvent)
+    # Latest snapshot per ticker via Postgres DISTINCT ON.
+    latest_iv = (
+        select(
+            IVSnapshot.ticker.label("iv_ticker"),
+            IVSnapshot.iv_rank,
+            IVSnapshot.expected_move_pct,
+        )
+        .order_by(IVSnapshot.ticker, IVSnapshot.snapshot_date.desc())
+        .distinct(IVSnapshot.ticker)
+        .subquery()
+    )
+
+    query = (
+        select(
+            EarningsEvent,
+            latest_iv.c.iv_rank,
+            latest_iv.c.expected_move_pct,
+        )
+        .outerjoin(latest_iv, latest_iv.c.iv_ticker == EarningsEvent.ticker)
         .where(EarningsEvent.report_date >= start)
         .where(EarningsEvent.report_date <= end)
         .order_by(EarningsEvent.report_date.asc(), EarningsEvent.ticker.asc())
     )
-    return result.scalars().all()
+
+    result = await db.execute(query)
+    out: list[EarningsEventResponse] = []
+    for event, iv_rank, expected_move_pct in result.all():
+        out.append(
+            EarningsEventResponse(
+                id=event.id,
+                ticker=event.ticker,
+                report_date=event.report_date,
+                report_time=event.report_time,
+                fiscal_period=event.fiscal_period,
+                source=event.source,
+                created_at=event.created_at,
+                updated_at=event.updated_at,
+                latest_iv_rank=iv_rank,
+                latest_expected_move_pct=expected_move_pct,
+            )
+        )
+    return out
 
 
 # ---------------------------------------------------------------------------

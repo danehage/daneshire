@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.main import app
 from app.models.earnings import EarningsEvent
+from app.models.iv_snapshots import IVSnapshot
 from app.services.market import EarningsDateUnknown, get_market
 
 TEST_SECRET = "test-scheduler-secret-earnings"
@@ -56,9 +57,11 @@ async def setup_scheduler_secret():
 
 @pytest.fixture(autouse=True)
 async def cleanup_earnings(db_session: AsyncSession):
+    await db_session.execute(delete(IVSnapshot))
     await db_session.execute(delete(EarningsEvent))
     await db_session.commit()
     yield
+    await db_session.execute(delete(IVSnapshot))
     await db_session.execute(delete(EarningsEvent))
     await db_session.commit()
 
@@ -339,3 +342,104 @@ async def test_list_earnings_calendar_ordered_by_date(
     data = response.json()
     dates = [d["report_date"] for d in data]
     assert dates == sorted(dates)
+
+
+# ---------------------------------------------------------------------------
+# IV snapshot join (issue #17)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_calendar_joins_latest_iv_snapshot(
+    client: AsyncClient, db_session: AsyncSession
+):
+    """Each event row exposes the most recent iv_snapshots row for its ticker."""
+    from sqlalchemy import insert
+
+    await db_session.execute(
+        insert(EarningsEvent).values(
+            [
+                {
+                    "ticker": "AAPL",
+                    "report_date": date(2026, 6, 4),
+                    "report_time": "amc",
+                    "source": "finnhub",
+                },
+                {
+                    "ticker": "MSFT",
+                    "report_date": date(2026, 6, 5),
+                    "report_time": "bmo",
+                    "source": "finnhub",
+                },
+            ]
+        )
+    )
+    # AAPL has two snapshots — the later one (2026-05-26) should win.
+    await db_session.execute(
+        insert(IVSnapshot).values(
+            [
+                {
+                    "ticker": "AAPL",
+                    "snapshot_date": date(2026, 5, 20),
+                    "iv30": "0.32",
+                    "iv_rank": "40.0",
+                    "expected_move_pct": "0.030",
+                    "source": "tastytrade",
+                },
+                {
+                    "ticker": "AAPL",
+                    "snapshot_date": date(2026, 5, 26),
+                    "iv30": "0.35",
+                    "iv_rank": "55.5",
+                    "expected_move_pct": "0.045",
+                    "source": "tastytrade",
+                },
+                # MSFT intentionally has no snapshot.
+            ]
+        )
+    )
+    await db_session.commit()
+
+    response = await client.get(
+        "/api/earnings/calendar",
+        params={"start": "2026-06-01", "end": "2026-06-30"},
+    )
+    assert response.status_code == 200
+    rows = {row["ticker"]: row for row in response.json()}
+
+    aapl = rows["AAPL"]
+    assert float(aapl["latest_iv_rank"]) == 55.5
+    assert float(aapl["latest_expected_move_pct"]) == 0.045
+
+    msft = rows["MSFT"]
+    assert msft["latest_iv_rank"] is None
+    assert msft["latest_expected_move_pct"] is None
+
+
+@pytest.mark.asyncio
+async def test_calendar_with_no_snapshots_returns_nulls(
+    client: AsyncClient, db_session: AsyncSession
+):
+    """If the iv_snapshots table is empty, every event row has null IV fields."""
+    from sqlalchemy import insert
+
+    await db_session.execute(
+        insert(EarningsEvent).values(
+            {
+                "ticker": "AAPL",
+                "report_date": date(2026, 6, 4),
+                "report_time": "amc",
+                "source": "finnhub",
+            }
+        )
+    )
+    await db_session.commit()
+
+    response = await client.get(
+        "/api/earnings/calendar",
+        params={"start": "2026-06-01", "end": "2026-06-30"},
+    )
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["latest_iv_rank"] is None
+    assert body[0]["latest_expected_move_pct"] is None

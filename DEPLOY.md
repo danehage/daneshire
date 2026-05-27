@@ -221,6 +221,19 @@ Writes one IV snapshot per `earnings-candidate`-tagged watchlist ticker
 into `iv_snapshots`. Runs 30 minutes after market close so end-of-day IV
 is settled.
 
+**Tastytrade API call volume.** The only job that hits tastytrade is
+this one. Per ticker per run it fetches the front-week options chain
+once (~1–3 HTTP calls depending on whether the chain and quote
+endpoints round-trip separately) to derive the ATM straddle, then
+writes `iv30` + `expected_move_pct` to `iv_snapshots`. Order of
+magnitude: 20 candidate tickers × ~2 calls × 5 weekdays ≈ **200
+calls/week**. No on-demand calls happen elsewhere — the screener
+(`GET /api/earnings/screen`), the per-ticker view
+(`GET /api/earnings/{ticker}`), and the alert evaluator
+(`run-earnings-checks`) all read from `iv_snapshots`; the chain is
+never re-fetched. Throttle the load by being selective about which
+watchlist items carry the `earnings-candidate` tag.
+
 ```bash
 gcloud scheduler jobs create http earnings-refresh-snapshots \
   --location us-central1 \

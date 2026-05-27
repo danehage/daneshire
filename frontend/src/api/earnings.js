@@ -10,6 +10,31 @@ export async function getEarningsCalendar({ start, end } = {}) {
   return res.json();
 }
 
+export async function getEarningsScreen({
+  start,
+  end,
+  minIvRank,
+  minEdgeRatio,
+  minVolume,
+} = {}) {
+  const params = new URLSearchParams();
+  if (start) params.set('start', start);
+  if (end) params.set('end', end);
+  if (minIvRank != null && minIvRank !== '') params.set('min_iv_rank', minIvRank);
+  if (minEdgeRatio != null && minEdgeRatio !== '') params.set('min_edge_ratio', minEdgeRatio);
+  if (minVolume != null && minVolume !== '') params.set('min_volume', minVolume);
+  const query = params.toString() ? `?${params}` : '';
+  const res = await fetch(`${API_BASE}/api/earnings/screen${query}`);
+  if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`);
+  return res.json();
+}
+
+export async function getEarningsExpectedMove(ticker) {
+  const res = await fetch(`${API_BASE}/api/earnings/${encodeURIComponent(ticker)}/expected-move`);
+  if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`);
+  return res.json();
+}
+
 // ---------------------------------------------------------------------------
 // Earnings trades CRUD (issue #16)
 // ---------------------------------------------------------------------------

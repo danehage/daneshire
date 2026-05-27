@@ -36,6 +36,9 @@ class _NullMarket:
     async def history(self, ticker, days=252):
         raise RuntimeError("test forgot to override get_market")
 
+    async def realized_move_history(self, ticker, events, quarters=8):
+        return [None] * len(events)
+
 
 @pytest_asyncio.fixture(scope="function")
 async def db_session() -> AsyncGenerator[AsyncSession, None]:

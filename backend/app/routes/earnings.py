@@ -1,22 +1,25 @@
 """
 Public earnings endpoints.
 
-GET    /api/earnings/calendar         — upcoming earnings events in a date range
-GET    /api/earnings/trades           — list trades with filters
-POST   /api/earnings/trades           — create a trade (issue #16)
-PATCH  /api/earnings/trades/{id}      — update trade (status, adjustments, commissions)
-DELETE /api/earnings/trades/{id}      — hard delete if is_paper, otherwise soft close
+GET    /api/earnings/calendar              — upcoming earnings events in a date range
+GET    /api/earnings/screen                — filtered + ranked screener (issue #19)
+GET    /api/earnings/{ticker}/expected-move — per-ticker edge ratio (issue #19)
+GET    /api/earnings/trades                — list trades with filters
+POST   /api/earnings/trades                — create a trade (issue #16)
+PATCH  /api/earnings/trades/{id}           — update trade (status, adjustments, commissions)
+DELETE /api/earnings/trades/{id}           — hard delete if is_paper, otherwise soft close
 """
 
 from __future__ import annotations
 
 import logging
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -25,11 +28,13 @@ from app.models.earnings_trades import EarningsTrade
 from app.models.iv_snapshots import IVSnapshot
 from app.schemas.earnings import (
     EarningsEventResponse,
+    EarningsExpectedMoveResponse,
     EarningsTradeCreate,
     EarningsTradeResponse,
     EarningsTradeUpdate,
     TradeStatus,
 )
+from app.services.market import MarketData, MarketDataError, get_market
 
 logger = logging.getLogger(__name__)
 
@@ -48,22 +53,11 @@ _ALLOWED_TRANSITIONS: dict[str, set[str]] = {
 }
 
 
-@router.get("/calendar", response_model=list[EarningsEventResponse])
-async def list_earnings_calendar(
-    start: date = Query(default=None),
-    end: date = Query(default=None),
-    db: AsyncSession = Depends(get_db),
-):
-    """Return earnings events ordered by report_date ASC, joined to the
-    most recent IV snapshot per ticker.
+_MIN_QUARTERS_FOR_EDGE = 4  # ADR-0003: fewer than 4 → no edge ratio
 
-    Defaults: start = today, end = today + 28 days.
-    """
-    today = date.today()
-    start = start or today
-    end = end or (today + timedelta(days=28))
 
-    # Latest snapshot per ticker via Postgres DISTINCT ON.
+def _build_subqueries():
+    """Return (latest_iv, avg_realized) SQLAlchemy subqueries."""
     latest_iv = (
         select(
             IVSnapshot.ticker.label("iv_ticker"),
@@ -75,36 +69,220 @@ async def list_earnings_calendar(
         .subquery()
     )
 
+    # Average of realized_move_pct from PAST events (report_date < today)
+    # per ticker; counts only rows where the column is not null.
+    today = date.today()
+    avg_realized = (
+        select(
+            EarningsEvent.ticker.label("rm_ticker"),
+            func.avg(EarningsEvent.realized_move_pct).label("avg_move"),
+            func.count(EarningsEvent.realized_move_pct).label("quarters_used"),
+        )
+        .where(EarningsEvent.report_date < today)
+        .where(EarningsEvent.realized_move_pct.isnot(None))
+        .group_by(EarningsEvent.ticker)
+        .subquery()
+    )
+
+    return latest_iv, avg_realized
+
+
+def _make_response(
+    event: EarningsEvent,
+    iv_rank,
+    expected_move_pct,
+    avg_move,
+    quarters_used,
+) -> EarningsEventResponse:
+    edge_ratio: Optional[Decimal] = None
+    if (
+        quarters_used is not None
+        and int(quarters_used) >= _MIN_QUARTERS_FOR_EDGE
+        and avg_move is not None
+        and float(avg_move) > 0
+        and expected_move_pct is not None
+    ):
+        edge_ratio = Decimal(str(float(expected_move_pct) / float(avg_move)))
+
+    return EarningsEventResponse(
+        id=event.id,
+        ticker=event.ticker,
+        report_date=event.report_date,
+        report_time=event.report_time,
+        fiscal_period=event.fiscal_period,
+        source=event.source,
+        created_at=event.created_at,
+        updated_at=event.updated_at,
+        latest_iv_rank=iv_rank,
+        latest_expected_move_pct=expected_move_pct,
+        historical_avg_realized_move_pct=avg_move,
+        edge_ratio=edge_ratio,
+    )
+
+
+@router.get("/calendar", response_model=list[EarningsEventResponse])
+async def list_earnings_calendar(
+    start: date = Query(default=None),
+    end: date = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return earnings events ordered by report_date ASC, joined to the
+    most recent IV snapshot per ticker and historical realized-move averages.
+
+    Defaults: start = today, end = today + 28 days.
+    """
+    today = date.today()
+    start = start or today
+    end = end or (today + timedelta(days=28))
+
+    latest_iv, avg_realized = _build_subqueries()
+
     query = (
         select(
             EarningsEvent,
             latest_iv.c.iv_rank,
             latest_iv.c.expected_move_pct,
+            avg_realized.c.avg_move,
+            avg_realized.c.quarters_used,
         )
         .outerjoin(latest_iv, latest_iv.c.iv_ticker == EarningsEvent.ticker)
+        .outerjoin(avg_realized, avg_realized.c.rm_ticker == EarningsEvent.ticker)
         .where(EarningsEvent.report_date >= start)
         .where(EarningsEvent.report_date <= end)
         .order_by(EarningsEvent.report_date.asc(), EarningsEvent.ticker.asc())
     )
 
     result = await db.execute(query)
-    out: list[EarningsEventResponse] = []
-    for event, iv_rank, expected_move_pct in result.all():
-        out.append(
-            EarningsEventResponse(
-                id=event.id,
-                ticker=event.ticker,
-                report_date=event.report_date,
-                report_time=event.report_time,
-                fiscal_period=event.fiscal_period,
-                source=event.source,
-                created_at=event.created_at,
-                updated_at=event.updated_at,
-                latest_iv_rank=iv_rank,
-                latest_expected_move_pct=expected_move_pct,
-            )
+    return [
+        _make_response(event, iv_rank, expected_move_pct, avg_move, quarters_used)
+        for event, iv_rank, expected_move_pct, avg_move, quarters_used in result.all()
+    ]
+
+
+@router.get("/screen", response_model=list[EarningsEventResponse])
+async def screen_earnings(
+    start: date = Query(default=None),
+    end: date = Query(default=None),
+    min_iv_rank: Optional[float] = Query(default=None, ge=0, le=100),
+    min_edge_ratio: Optional[float] = Query(default=None, ge=0),
+    min_volume: Optional[int] = Query(default=None, ge=0),
+    db: AsyncSession = Depends(get_db),
+    market: MarketData = Depends(get_market),
+):
+    """Filtered + ranked earnings screener.
+
+    Joins IV snapshots and historical realized-move averages. Default sort:
+    edge_ratio DESC NULLS LAST, iv_rank DESC. Volume filter fetches live
+    quotes via the MarketData seam.
+    """
+    today = date.today()
+    start = start or today
+    end = end or (today + timedelta(days=28))
+
+    latest_iv, avg_realized = _build_subqueries()
+
+    query = (
+        select(
+            EarningsEvent,
+            latest_iv.c.iv_rank,
+            latest_iv.c.expected_move_pct,
+            avg_realized.c.avg_move,
+            avg_realized.c.quarters_used,
         )
-    return out
+        .outerjoin(latest_iv, latest_iv.c.iv_ticker == EarningsEvent.ticker)
+        .outerjoin(avg_realized, avg_realized.c.rm_ticker == EarningsEvent.ticker)
+        .where(EarningsEvent.report_date >= start)
+        .where(EarningsEvent.report_date <= end)
+    )
+
+    if min_iv_rank is not None:
+        query = query.where(latest_iv.c.iv_rank >= Decimal(str(min_iv_rank)))
+
+    result = await db.execute(query)
+    rows = result.all()
+
+    candidates: list[EarningsEventResponse] = []
+    for event, iv_rank, expected_move_pct, avg_move, quarters_used in rows:
+        resp = _make_response(event, iv_rank, expected_move_pct, avg_move, quarters_used)
+
+        if min_edge_ratio is not None:
+            if resp.edge_ratio is None or float(resp.edge_ratio) < min_edge_ratio:
+                continue
+
+        candidates.append(resp)
+
+    # Volume filter: fetch live quotes only when needed.
+    if min_volume is not None and candidates:
+        tickers = list({r.ticker for r in candidates})
+        quote_map = await market.quotes(tickers)
+        filtered: list[EarningsEventResponse] = []
+        for resp in candidates:
+            q = quote_map.get(resp.ticker)
+            if isinstance(q, MarketDataError) or q is None:
+                continue
+            if q.volume >= min_volume:
+                filtered.append(resp)
+        candidates = filtered
+
+    # Sort: edge_ratio DESC NULLS LAST, iv_rank DESC.
+    def _sort_key(r: EarningsEventResponse):
+        edge = float(r.edge_ratio) if r.edge_ratio is not None else -1.0
+        iv = float(r.latest_iv_rank) if r.latest_iv_rank is not None else -1.0
+        return (edge, iv)
+
+    candidates.sort(key=_sort_key, reverse=True)
+    return candidates
+
+
+@router.get("/{ticker}/expected-move", response_model=EarningsExpectedMoveResponse)
+async def get_expected_move(
+    ticker: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Per-ticker edge ratio: expected_move_pct / historical_avg_realized_move_pct.
+
+    Returns null edge_ratio when fewer than 4 past quarters have recorded
+    realized moves (ADR-0003 minimum).
+    """
+    symbol = ticker.upper()
+    today = date.today()
+
+    # Latest IV snapshot for expected_move_pct.
+    snap_stmt = (
+        select(IVSnapshot.iv_rank, IVSnapshot.expected_move_pct)
+        .where(IVSnapshot.ticker == symbol)
+        .order_by(IVSnapshot.snapshot_date.desc())
+        .limit(1)
+    )
+    snap_row = (await db.execute(snap_stmt)).one_or_none()
+    expected_move_pct = snap_row.expected_move_pct if snap_row else None
+
+    # Last 8 quarters of realized moves from past events.
+    hist_stmt = (
+        select(EarningsEvent.realized_move_pct)
+        .where(EarningsEvent.ticker == symbol)
+        .where(EarningsEvent.report_date < today)
+        .where(EarningsEvent.realized_move_pct.isnot(None))
+        .order_by(EarningsEvent.report_date.desc())
+        .limit(8)
+    )
+    hist_rows = (await db.execute(hist_stmt)).scalars().all()
+    quarters_used = len(hist_rows)
+
+    historical_avg: Optional[Decimal] = None
+    edge_ratio: Optional[Decimal] = None
+    if quarters_used >= _MIN_QUARTERS_FOR_EDGE and hist_rows:
+        historical_avg = Decimal(str(sum(float(m) for m in hist_rows) / quarters_used))
+        if expected_move_pct is not None and float(historical_avg) > 0:
+            edge_ratio = Decimal(str(float(expected_move_pct) / float(historical_avg)))
+
+    return EarningsExpectedMoveResponse(
+        ticker=symbol,
+        expected_move_pct=expected_move_pct,
+        historical_avg_realized_move_pct=historical_avg,
+        edge_ratio=edge_ratio,
+        quarters_used=quarters_used,
+    )
 
 
 # ---------------------------------------------------------------------------

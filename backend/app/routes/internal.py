@@ -13,7 +13,7 @@ import secrets
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,10 +28,14 @@ from app.models.iv_snapshots import IVSnapshot
 from app.models.watchlist import WatchlistItem
 from app.routes.dependencies import get_alert_engine
 from app.schemas.alert_runs import RunSummary
-from app.schemas.earnings import CalendarRefreshSummary, IVSnapshotRefreshSummary
+from app.schemas.earnings import (
+    BackfillRealizedMovesSummary,
+    CalendarRefreshSummary,
+    IVSnapshotRefreshSummary,
+)
 from app.schemas.iv import IVSnapshotRaw
 from app.services.alert_engine import AlertEngine
-from app.services.market import MarketData, EarningsDateUnknown, MarketDataError, get_market
+from app.services.market import MarketData, EarningsDateUnknown, MarketDataError, get_market, compute_realized_move
 from app.services.notifications import PushoverClient
 
 
@@ -281,6 +285,69 @@ async def _resolve_iv_rank(
     elif rank > 100:
         rank = Decimal(100)
     return rank, "self_252d"
+
+
+@router.post("/earnings/backfill-realized-moves", response_model=BackfillRealizedMovesSummary)
+async def backfill_realized_moves(
+    limit: int = Query(default=50, ge=1, le=500),
+    market: MarketData = Depends(get_market),
+    db: AsyncSession = Depends(get_db),
+    _: None = Depends(verify_scheduler_secret),
+):
+    """Compute and persist ``realized_move_pct`` for past earnings events.
+
+    Idempotent — events already having a value are skipped. Processes up
+    to ``limit`` events per call (default 50) for pagination-friendly
+    operation under Cloud Run's request timeout. Oldest events first.
+    """
+    today = date.today()
+
+    # Fetch past events missing realized_move_pct, oldest first.
+    stmt = (
+        select(EarningsEvent)
+        .where(EarningsEvent.report_date < today)
+        .where(EarningsEvent.realized_move_pct.is_(None))
+        .order_by(EarningsEvent.report_date.asc())
+        .limit(limit)
+    )
+    rows = (await db.execute(stmt)).scalars().all()
+    total_events = len(rows)
+
+    # Group by ticker to avoid repeated FMP fetches for the same symbol.
+    from collections import defaultdict
+    by_ticker: dict[str, list[EarningsEvent]] = defaultdict(list)
+    for row in rows:
+        by_ticker[row.ticker].append(row)
+
+    processed = 0
+    skipped_no_history: list[str] = []
+
+    for ticker, events in by_ticker.items():
+        try:
+            frame = await market.history(ticker, days=1500)
+        except MarketDataError:
+            skipped_no_history.append(ticker)
+            continue
+
+        bars = [{"date": str(b.date), "close": float(b.close)} for b in frame.bars]
+        for event in events:
+            move = compute_realized_move(bars, event.report_date, event.report_time)
+            if move is not None:
+                event.realized_move_pct = move
+                event.updated_at = datetime.now(timezone.utc)
+                processed += 1
+
+    await db.commit()
+    logger.info(
+        "backfill-realized-moves: processed %d events, skipped %d tickers",
+        processed,
+        len(skipped_no_history),
+    )
+    return BackfillRealizedMovesSummary(
+        processed=processed,
+        skipped_no_history=skipped_no_history,
+        total_events=total_events,
+    )
 
 
 @router.get("/health")

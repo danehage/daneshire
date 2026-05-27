@@ -22,6 +22,11 @@ class EarningsEventResponse(BaseModel):
     latest_iv_rank: Optional[Decimal] = None
     latest_expected_move_pct: Optional[Decimal] = None
 
+    # Computed from past earnings_events.realized_move_pct (after backfill).
+    # Null when fewer than 4 past quarters have recorded realized moves.
+    historical_avg_realized_move_pct: Optional[Decimal] = None
+    edge_ratio: Optional[Decimal] = None
+
     model_config = ConfigDict(from_attributes=True)
 
 
@@ -36,6 +41,22 @@ class IVSnapshotRefreshSummary(BaseModel):
     written: int
     skipped_no_data: list[str]
     skipped_rejected_move: list[str]
+
+
+class EarningsExpectedMoveResponse(BaseModel):
+    ticker: str
+    expected_move_pct: Optional[Decimal]
+    historical_avg_realized_move_pct: Optional[Decimal]
+    edge_ratio: Optional[Decimal]
+    quarters_used: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class BackfillRealizedMovesSummary(BaseModel):
+    processed: int
+    skipped_no_history: list[str]
+    total_events: int
 
 
 # ---------------------------------------------------------------------------

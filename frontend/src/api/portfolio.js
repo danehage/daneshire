@@ -22,3 +22,24 @@ export async function commitSnapshot(data) {
   if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`);
   return res.json();
 }
+
+export async function commitTrade(data) {
+  const res = await fetch(`${API_BASE}/api/portfolio/trades/commit`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`);
+  return res.json();
+}
+
+export async function getTrades({ accountId, ticker, since } = {}) {
+  const params = new URLSearchParams();
+  if (accountId) params.set("account_id", accountId);
+  if (ticker) params.set("ticker", ticker);
+  if (since) params.set("since", since);
+  const query = params.toString() ? `?${params.toString()}` : "";
+  const res = await fetch(`${API_BASE}/api/portfolio/trades${query}`);
+  if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`);
+  return res.json();
+}

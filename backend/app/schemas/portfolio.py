@@ -6,6 +6,44 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class TradeCommit(BaseModel):
+    account_id: UUID
+    watchlist_item_id: Optional[UUID] = None
+    ticker: str = Field(..., max_length=20)
+    instrument_type: str = Field(..., pattern="^(equity|option)$")
+    side: str = Field(..., pattern="^(buy|sell)$")
+    qty: Decimal = Field(..., gt=0)
+    price: Decimal = Field(..., ge=0)
+    executed_at: datetime
+    option_type: Optional[str] = Field(default=None, pattern="^(call|put)$")
+    strike: Optional[Decimal] = None
+    expiry: Optional[date] = None
+    multiplier: Optional[int] = None
+    underlying_ticker: Optional[str] = Field(default=None, max_length=20)
+
+
+class TradeResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=False)
+
+    id: UUID
+    account_id: UUID
+    watchlist_item_id: Optional[UUID]
+    ticker: str
+    instrument_type: str
+    side: str
+    qty: Decimal
+    price: Decimal
+    executed_at: datetime
+    created_at: datetime
+    option_type: Optional[str]
+    strike: Optional[Decimal]
+    expiry: Optional[date]
+    multiplier: Optional[int]
+    underlying_ticker: Optional[str]
+    realized_pl: Optional[Decimal] = None
+    warnings: list[str] = []
+
+
 class HoldingCommit(BaseModel):
     instrument_type: str = Field(..., pattern="^(equity|option)$")
     ticker: str = Field(..., max_length=20)

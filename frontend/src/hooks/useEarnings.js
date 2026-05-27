@@ -1,6 +1,8 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   getEarningsCalendar,
+  getEarningsScreen,
+  getEarningsExpectedMove,
   getEarningsTrades,
   createEarningsTrade,
   updateEarningsTrade,
@@ -11,6 +13,28 @@ export function useEarningsCalendar({ start, end } = {}) {
   return useQuery({
     queryKey: ['earnings', 'calendar', start, end],
     queryFn: () => getEarningsCalendar({ start, end }),
+  });
+}
+
+export function useEarningsScreen({
+  start,
+  end,
+  minIvRank,
+  minEdgeRatio,
+  minVolume,
+} = {}) {
+  return useQuery({
+    queryKey: ['earnings', 'screen', start, end, minIvRank, minEdgeRatio, minVolume],
+    queryFn: () =>
+      getEarningsScreen({ start, end, minIvRank, minEdgeRatio, minVolume }),
+  });
+}
+
+export function useEarningsExpectedMove(ticker) {
+  return useQuery({
+    queryKey: ['earnings', 'expectedMove', ticker],
+    queryFn: () => getEarningsExpectedMove(ticker),
+    enabled: Boolean(ticker),
   });
 }
 

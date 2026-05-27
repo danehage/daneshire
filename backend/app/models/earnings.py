@@ -1,8 +1,9 @@
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, Date, Index, String, Text, DateTime, text, UniqueConstraint
+from sqlalchemy import CheckConstraint, Date, Index, Numeric, String, DateTime, text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -24,6 +25,9 @@ class EarningsEvent(Base):
     )
     fiscal_period: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
     source: Mapped[str] = mapped_column(String(20), nullable=False, server_default="finnhub")
+    realized_move_pct: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(10, 6), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=text("now()")
     )

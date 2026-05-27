@@ -1,6 +1,6 @@
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
-import { useEarningsCalendar } from '../hooks/useEarnings';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { useEarningsScreen } from '../hooks/useEarnings';
 import EarningsTradeForm from '../components/EarningsTradeForm';
 import EarningsTradesList from '../components/EarningsTradesList';
 
@@ -35,36 +35,100 @@ function SortButton({ label, field, sortField, sortDir, onSort }) {
   );
 }
 
+function FilterInput({ label, value, onChange, placeholder, type = 'number', min }) {
+  return (
+    <div>
+      <label className="block text-xs font-semibold uppercase tracking-wide text-mid-brown mb-1">
+        {label}
+      </label>
+      <input
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        min={min}
+        className="border-2 border-ink px-2 py-1 text-sm font-mono bg-warm-white w-28"
+      />
+    </div>
+  );
+}
+
+const DEBOUNCE_MS = 300;
+
+function useDebounced(value, delay = DEBOUNCE_MS) {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(t);
+  }, [value, delay]);
+  return debounced;
+}
+
 export default function EarningsPage() {
-  const today = new Date().toISOString().split('T')[0];
-  const end = new Date(Date.now() + 28 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+  const todayStr = new Date().toISOString().split('T')[0];
+  const endDefault = new Date(Date.now() + 28 * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .split('T')[0];
 
-  const [startDate, setStartDate] = useState(today);
-  const [endDate, setEndDate] = useState(end);
-  const [sortField, setSortField] = useState('report_date');
-  const [sortDir, setSortDir] = useState('asc');
-  // Secondary sort: when the user is sorting by the default field
-  // (`report_date`), break ties by IV rank desc (PRD §3 default).
-  const SECONDARY_FIELD = 'latest_iv_rank';
+  const [searchParams, setSearchParams] = useSearchParams();
 
-  const { data: events = [], isLoading, isError, error } = useEarningsCalendar({
+  // Read initial state from URL, fall back to defaults.
+  const [startDate, setStartDate] = useState(
+    searchParams.get('start') || todayStr
+  );
+  const [endDate, setEndDate] = useState(
+    searchParams.get('end') || endDefault
+  );
+  const [minIvRankInput, setMinIvRankInput] = useState(
+    searchParams.get('min_iv_rank') || ''
+  );
+  const [minEdgeRatioInput, setMinEdgeRatioInput] = useState(
+    searchParams.get('min_edge_ratio') || ''
+  );
+  const [minVolumeInput, setMinVolumeInput] = useState(
+    searchParams.get('min_volume') || ''
+  );
+
+  // Debounced filter values drive the query.
+  const minIvRank = useDebounced(minIvRankInput);
+  const minEdgeRatio = useDebounced(minEdgeRatioInput);
+  const minVolume = useDebounced(minVolumeInput);
+
+  // Sync state → URL query string.
+  const isFirstRender = useRef(true);
+  useEffect(() => {
+    if (isFirstRender.current) {
+      isFirstRender.current = false;
+      return;
+    }
+    const p = {};
+    if (startDate) p.start = startDate;
+    if (endDate) p.end = endDate;
+    if (minIvRank) p.min_iv_rank = minIvRank;
+    if (minEdgeRatio) p.min_edge_ratio = minEdgeRatio;
+    if (minVolume) p.min_volume = minVolume;
+    setSearchParams(p, { replace: true });
+  }, [startDate, endDate, minIvRank, minEdgeRatio, minVolume, setSearchParams]);
+
+  const [sortField, setSortField] = useState('edge_ratio');
+  const [sortDir, setSortDir] = useState('desc');
+
+  const { data: events = [], isLoading, isError, error } = useEarningsScreen({
     start: startDate,
     end: endDate,
+    minIvRank: minIvRank || undefined,
+    minEdgeRatio: minEdgeRatio || undefined,
+    minVolume: minVolume || undefined,
   });
 
-  function handleSort(field) {
-    if (sortField === field) {
-      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
-    } else {
-      setSortField(field);
-      setSortDir('asc');
-    }
-  }
+  const handleSort = useCallback((field) => {
+    setSortDir((d) => (sortField === field ? (d === 'asc' ? 'desc' : 'asc') : 'asc'));
+    setSortField(field);
+  }, [sortField]);
 
   function compare(a, b, field, dir) {
     const rawA = a[field];
     const rawB = b[field];
-    // Nulls always sort last regardless of direction.
     const aMissing = rawA === null || rawA === undefined || rawA === '';
     const bMissing = rawB === null || rawB === undefined || rawB === '';
     if (aMissing && bMissing) return 0;
@@ -73,8 +137,12 @@ export default function EarningsPage() {
 
     let valA = rawA;
     let valB = rawB;
-    // IV / move are decimal strings off the wire — compare as numbers.
-    if (field === 'latest_iv_rank' || field === 'latest_expected_move_pct') {
+    if (
+      field === 'latest_iv_rank' ||
+      field === 'latest_expected_move_pct' ||
+      field === 'edge_ratio' ||
+      field === 'historical_avg_realized_move_pct'
+    ) {
       valA = Number(valA);
       valB = Number(valB);
     } else if (typeof valA === 'string') {
@@ -89,21 +157,22 @@ export default function EarningsPage() {
   const sorted = [...events].sort((a, b) => {
     const primary = compare(a, b, sortField, sortDir);
     if (primary !== 0) return primary;
-    if (sortField === 'report_date') {
-      // Tie-break by IV rank desc.
-      return compare(a, b, SECONDARY_FIELD, 'desc');
-    }
-    return 0;
+    // Tie-break: IV rank desc, then report_date asc.
+    const byIv = compare(a, b, 'latest_iv_rank', 'desc');
+    if (byIv !== 0) return byIv;
+    return compare(a, b, 'report_date', 'asc');
   });
+
+  const hasFilters = Boolean(minIvRank || minEdgeRatio || minVolume);
 
   return (
     <div>
       <div className="mb-6">
-        <h1 className="text-2xl font-serif font-bold text-ink mb-1">Earnings Calendar</h1>
-        <p className="text-sm text-mid-brown">Upcoming earnings announcements</p>
+        <h1 className="text-2xl font-serif font-bold text-ink mb-1">Earnings Screener</h1>
+        <p className="text-sm text-mid-brown">Upcoming earnings with IV rank, expected move, and edge ratio</p>
       </div>
 
-      {/* Date range filter */}
+      {/* Date range + screener filters */}
       <div className="flex flex-wrap gap-3 mb-6 items-end">
         <div>
           <label className="block text-xs font-semibold uppercase tracking-wide text-mid-brown mb-1">
@@ -127,23 +196,62 @@ export default function EarningsPage() {
             className="border-2 border-ink px-2 py-1 text-sm font-mono bg-warm-white"
           />
         </div>
+
+        <div className="h-6 w-px bg-gray-300 dark:bg-gray-600 self-center mx-1" />
+
+        <FilterInput
+          label="Min IV Rank"
+          value={minIvRankInput}
+          onChange={setMinIvRankInput}
+          placeholder="e.g. 50"
+          min="0"
+        />
+        <FilterInput
+          label="Min Edge Ratio"
+          value={minEdgeRatioInput}
+          onChange={setMinEdgeRatioInput}
+          placeholder="e.g. 1.2"
+          min="0"
+        />
+        <FilterInput
+          label="Min Volume"
+          value={minVolumeInput}
+          onChange={setMinVolumeInput}
+          placeholder="e.g. 500000"
+          min="0"
+        />
+
+        {hasFilters && (
+          <button
+            onClick={() => {
+              setMinIvRankInput('');
+              setMinEdgeRatioInput('');
+              setMinVolumeInput('');
+            }}
+            className="text-xs text-mid-brown underline hover:text-ink self-end mb-1"
+          >
+            Clear filters
+          </button>
+        )}
       </div>
 
       {isLoading && (
-        <p className="text-mid-brown text-sm">Loading earnings calendar…</p>
+        <p className="text-mid-brown text-sm">Loading screener…</p>
       )}
 
       {isError && (
         <div className="border-2 border-red-500 bg-red-50 p-4 text-red-700 text-sm">
-          Failed to load earnings: {error?.message}
+          Failed to load: {error?.message}
         </div>
       )}
 
       {!isLoading && !isError && sorted.length === 0 && (
         <div className="border-2 border-ink p-8 text-center">
-          <p className="text-mid-brown font-medium">No upcoming earnings</p>
+          <p className="text-mid-brown font-medium">No events match the current filters</p>
           <p className="text-sm text-mid-brown mt-1">
-            Try adjusting the date range or run a calendar refresh.
+            {hasFilters
+              ? 'Try relaxing the filters or adjusting the date range.'
+              : 'Try adjusting the date range or run a calendar refresh.'}
           </p>
         </div>
       )}
@@ -154,58 +262,28 @@ export default function EarningsPage() {
             <thead>
               <tr className="border-b-2 border-ink bg-warm-white">
                 <th className="px-4 py-3 text-left">
-                  <SortButton
-                    label="Ticker"
-                    field="ticker"
-                    sortField={sortField}
-                    sortDir={sortDir}
-                    onSort={handleSort}
-                  />
+                  <SortButton label="Ticker" field="ticker" sortField={sortField} sortDir={sortDir} onSort={handleSort} />
                 </th>
                 <th className="px-4 py-3 text-left">
-                  <SortButton
-                    label="Report Date"
-                    field="report_date"
-                    sortField={sortField}
-                    sortDir={sortDir}
-                    onSort={handleSort}
-                  />
+                  <SortButton label="Report Date" field="report_date" sortField={sortField} sortDir={sortDir} onSort={handleSort} />
                 </th>
                 <th className="px-4 py-3 text-left">
-                  <SortButton
-                    label="Time"
-                    field="report_time"
-                    sortField={sortField}
-                    sortDir={sortDir}
-                    onSort={handleSort}
-                  />
+                  <SortButton label="Time" field="report_time" sortField={sortField} sortDir={sortDir} onSort={handleSort} />
                 </th>
                 <th className="px-4 py-3 text-left">
-                  <SortButton
-                    label="Period"
-                    field="fiscal_period"
-                    sortField={sortField}
-                    sortDir={sortDir}
-                    onSort={handleSort}
-                  />
+                  <SortButton label="Period" field="fiscal_period" sortField={sortField} sortDir={sortDir} onSort={handleSort} />
                 </th>
                 <th className="px-4 py-3 text-right">
-                  <SortButton
-                    label="IV Rank"
-                    field="latest_iv_rank"
-                    sortField={sortField}
-                    sortDir={sortDir}
-                    onSort={handleSort}
-                  />
+                  <SortButton label="IV Rank" field="latest_iv_rank" sortField={sortField} sortDir={sortDir} onSort={handleSort} />
                 </th>
                 <th className="px-4 py-3 text-right">
-                  <SortButton
-                    label="Exp Move %"
-                    field="latest_expected_move_pct"
-                    sortField={sortField}
-                    sortDir={sortDir}
-                    onSort={handleSort}
-                  />
+                  <SortButton label="Exp Move %" field="latest_expected_move_pct" sortField={sortField} sortDir={sortDir} onSort={handleSort} />
+                </th>
+                <th className="px-4 py-3 text-right">
+                  <SortButton label="Avg Realized %" field="historical_avg_realized_move_pct" sortField={sortField} sortDir={sortDir} onSort={handleSort} />
+                </th>
+                <th className="px-4 py-3 text-right">
+                  <SortButton label="Edge Ratio" field="edge_ratio" sortField={sortField} sortDir={sortDir} onSort={handleSort} />
                 </th>
               </tr>
             </thead>
@@ -237,14 +315,23 @@ export default function EarningsPage() {
                     {event.fiscal_period || '—'}
                   </td>
                   <td className="px-4 py-3 text-right font-mono text-ink">
-                    {event.latest_iv_rank !== null && event.latest_iv_rank !== undefined
+                    {event.latest_iv_rank != null
                       ? Number(event.latest_iv_rank).toFixed(1)
                       : '—'}
                   </td>
                   <td className="px-4 py-3 text-right font-mono text-ink">
-                    {event.latest_expected_move_pct !== null &&
-                    event.latest_expected_move_pct !== undefined
+                    {event.latest_expected_move_pct != null
                       ? `${(Number(event.latest_expected_move_pct) * 100).toFixed(2)}%`
+                      : '—'}
+                  </td>
+                  <td className="px-4 py-3 text-right font-mono text-mid-brown">
+                    {event.historical_avg_realized_move_pct != null
+                      ? `${(Number(event.historical_avg_realized_move_pct) * 100).toFixed(2)}%`
+                      : '—'}
+                  </td>
+                  <td className="px-4 py-3 text-right font-mono font-semibold text-ink">
+                    {event.edge_ratio != null
+                      ? Number(event.edge_ratio).toFixed(2)
                       : '—'}
                   </td>
                 </tr>

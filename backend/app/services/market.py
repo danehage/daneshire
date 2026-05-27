@@ -21,6 +21,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from datetime import date
+from decimal import Decimal
 from typing import Any, Generic, Optional, TypeVar
 
 from fastapi import Request
@@ -195,6 +196,7 @@ ANALYSIS_TTL_SECONDS = 5 * 60.0
 HISTORY_TTL_SECONDS = 60 * 60.0
 EARNINGS_TTL_SECONDS = 6 * 60 * 60.0  # 6 hours
 IV_TTL_SECONDS = 60 * 60.0  # 1 hour, per ADR-0002
+REALIZED_MOVE_TTL_SECONDS = 24 * 60 * 60.0  # 24h — computed from stable historical data
 
 
 class MarketData:
@@ -216,6 +218,7 @@ class MarketData:
         history_ttl: float = HISTORY_TTL_SECONDS,
         earnings_ttl: float = EARNINGS_TTL_SECONDS,
         iv_ttl: float = IV_TTL_SECONDS,
+        realized_move_ttl: float = REALIZED_MOVE_TTL_SECONDS,
         clock=time.monotonic,
     ):
         self.client = client
@@ -236,6 +239,9 @@ class MarketData:
         )
         self._iv_cache: _TTLSingleflightCache[IVSnapshotRaw] = _TTLSingleflightCache(
             iv_ttl, clock=clock
+        )
+        self._realized_move_cache: _TTLSingleflightCache[list] = _TTLSingleflightCache(
+            realized_move_ttl, clock=clock
         )
 
     # -- quotes -------------------------------------------------------------
@@ -400,6 +406,48 @@ class MarketData:
         )
         return results
 
+    # -- realized move history ----------------------------------------------
+
+    async def realized_move_history(
+        self,
+        ticker: str,
+        events: list[tuple[date, str]],
+        quarters: int = 8,
+    ) -> list[Optional[Decimal]]:
+        """Compute close-to-close realized moves for ``events`` per ADR-0003.
+
+        ``events`` is a list of ``(report_date, report_time)`` pairs sourced
+        from ``earnings_events`` — callers pull them from the DB. FMP price
+        history is fetched once and cached with a 24h TTL + single-flight.
+
+        Returns one ``Decimal | None`` per event in the same order. ``None``
+        means the surrounding price bars were not available (ticker too new,
+        event too old, or FMP returned nothing).
+        """
+        symbol = ticker.upper()
+        # Cache key includes the sorted events tuple for stability.
+        sorted_events = tuple(sorted(events, reverse=True))[:quarters]
+        key = ("realized_move_history", symbol, sorted_events)
+        return await self._realized_move_cache.get_or_fetch(
+            key,
+            lambda: self._compute_realized_move_history(symbol, sorted_events),
+        )
+
+    async def _compute_realized_move_history(
+        self,
+        ticker: str,
+        events: tuple[tuple[date, str], ...],
+    ) -> list[Optional[Decimal]]:
+        try:
+            frame = await self.history(ticker, days=1500)
+        except MarketDataError:
+            return [None] * len(events)
+        bars = [{"date": str(b.date), "close": float(b.close)} for b in frame.bars]
+        return [
+            compute_realized_move(bars, report_date, report_time)
+            for report_date, report_time in events
+        ]
+
     # -- helpers ------------------------------------------------------------
 
     async def _gather_one(
@@ -414,6 +462,64 @@ class MarketData:
             sink[ticker] = exc
         except Exception as exc:  # noqa: BLE001 — last-ditch safety net
             sink[ticker] = UpstreamError(ticker, str(exc))
+
+
+# ---------------------------------------------------------------------------
+# ADR-0003 realized-move formula
+# ---------------------------------------------------------------------------
+
+
+def compute_realized_move(
+    bars: list[dict],
+    report_date: date,
+    report_time: str,
+) -> Optional[Decimal]:
+    """Return abs((post_close - pre_close) / pre_close) per ADR-0003.
+
+    ``bars`` is a list of ``{"date": "YYYY-MM-DD", "close": float}`` sorted
+    in any order (oldest or newest first) — only calendar ordering matters.
+
+    ``report_time``:
+    - ``"bmo"``  → post_close = first bar on or after ``report_date``
+    - ``"amc"``  → post_close = first bar strictly after ``report_date``
+    - anything else ("unknown") → same as ``"amc"``
+
+    Returns ``None`` when either price anchor is unavailable.
+    """
+    date_to_close: dict[date, float] = {}
+    for bar in bars:
+        try:
+            d = date.fromisoformat(str(bar["date"]))
+            date_to_close[d] = float(bar["close"])
+        except (KeyError, ValueError, TypeError):
+            continue
+
+    if not date_to_close:
+        return None
+
+    sorted_dates = sorted(date_to_close)
+
+    # pre_close: last regular session strictly before report_date.
+    pre_candidates = [d for d in sorted_dates if d < report_date]
+    if not pre_candidates:
+        return None
+    pre_close = date_to_close[pre_candidates[-1]]
+
+    # post_close: same day for bmo (first bar >= report_date),
+    # next session for amc/unknown (first bar > report_date).
+    if report_time == "bmo":
+        post_candidates = [d for d in sorted_dates if d >= report_date]
+    else:
+        post_candidates = [d for d in sorted_dates if d > report_date]
+
+    if not post_candidates:
+        return None
+    post_close = date_to_close[post_candidates[0]]
+
+    if pre_close == 0.0:
+        return None
+
+    return abs(Decimal(str((post_close - pre_close) / pre_close)))
 
 
 # ---------------------------------------------------------------------------

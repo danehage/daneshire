@@ -286,6 +286,22 @@ See `DEPLOY.md` for full Cloud Run + Cloud Scheduler setup.
 
 ---
 
+## Where We Left Off (2026-05-26) — Issue #8
+
+**PortfolioEngine + live marks (issue #8) — complete.**
+
+- `backend/app/services/portfolio_engine.py` — `PortfolioEngine(db, market)` with `current_holdings(account_id)` and `portfolio_value(account_id)`. Internal `ComputedHolding` and `PortfolioValue` dataclasses. Mirrors AlertEngine pattern.
+- `get_portfolio_engine` dependency factory added to `backend/app/routes/dependencies.py`
+- `PortfolioValueResponse` and `ComputedHoldingResponse` added to `backend/app/schemas/portfolio.py`
+- `GET /api/portfolio?account_id=…` upgraded to use engine and return `PortfolioValueResponse` (live FMP marks for equity positions, null market_value for options/missing quotes)
+- `frontend/src/components/portfolio/PortfolioHeroCard.jsx` — hero card showing total value, day change, cash, and freshness label ("snapshot from N days ago")
+- `frontend/src/pages/PortfolioPage.jsx` — uses `data.positions` (new shape), renders PortfolioHeroCard above holdings table
+- Engine tests: `backend/tests/test_services/test_portfolio_engine.py` (7 cases covering baseline holdings, missing snapshot, live quote math, total_value accuracy, missing-quote null surfacing, multi-account isolation, cash-only total)
+- Route tests updated: `test_portfolio.py` — all tests updated to assert `PortfolioValueResponse` shape; `test_get_portfolio_no_account_id_aggregates` replaced with `test_get_portfolio_no_account_id_returns_empty` (new route behavior)
+- Frontend build: `npm run build` passes
+
+---
+
 ## Where We Left Off (2026-05-21) — Issue #14
 
 **Earnings calendar tracer bullet — complete.**

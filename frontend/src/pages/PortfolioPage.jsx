@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useAccounts, usePortfolio, useCommitSnapshot } from "../hooks/usePortfolio";
+import PortfolioHeroCard from "../components/portfolio/PortfolioHeroCard";
 
 function AccountSelector({ accounts, selectedId, onSelect }) {
   return (
@@ -31,8 +32,8 @@ function HoldingsBadge({ type }) {
   return null;
 }
 
-function HoldingsTable({ holdings }) {
-  if (holdings.length === 0) {
+function HoldingsTable({ positions }) {
+  if (positions.length === 0) {
     return (
       <div className="p-8 text-center text-mid-brown font-mono text-sm">
         No positions in this snapshot.
@@ -48,44 +49,62 @@ function HoldingsTable({ holdings }) {
           <th className="text-right py-2 px-3 font-bold uppercase text-xs tracking-wide">Qty</th>
           <th className="text-right py-2 px-3 font-bold uppercase text-xs tracking-wide">Avg Cost</th>
           <th className="text-right py-2 px-3 font-bold uppercase text-xs tracking-wide">Mkt Value</th>
+          <th className="text-right py-2 px-3 font-bold uppercase text-xs tracking-wide">Day Chg</th>
           <th className="text-left py-2 px-3 font-bold uppercase text-xs tracking-wide">Type</th>
         </tr>
       </thead>
       <tbody>
-        {holdings.map((h) => (
-          <tr key={h.id} className="border-b border-ink/20 hover:bg-cream/50">
-            <td className="py-2 px-3">
-              <div className="flex items-center gap-2">
-                <Link
-                  to={`/ticker/${h.ticker}`}
-                  className="font-bold text-ink hover:text-accent transition-colors"
-                >
-                  {h.ticker}
-                </Link>
-                {h.instrument_type === "option" && h.underlying_ticker && (
-                  <span className="text-xs text-mid-brown">
-                    / {h.underlying_ticker}
-                  </span>
-                )}
-              </div>
-              {h.instrument_type === "option" && (
-                <div className="text-xs text-mid-brown">
-                  {h.option_type?.toUpperCase()} ${h.strike} exp {h.expiry}
+        {positions.map((pos, i) => {
+          const dayChgNum = pos.day_change != null ? Number(pos.day_change) : null;
+          const isPositive = dayChgNum != null && dayChgNum > 0;
+          const isNegative = dayChgNum != null && dayChgNum < 0;
+          return (
+            <tr key={i} className="border-b border-ink/20 hover:bg-cream/50">
+              <td className="py-2 px-3">
+                <div className="flex items-center gap-2">
+                  <Link
+                    to={`/ticker/${pos.ticker}`}
+                    className="font-bold text-ink hover:text-accent transition-colors"
+                  >
+                    {pos.ticker}
+                  </Link>
+                  {pos.instrument_type === "option" && pos.underlying_ticker && (
+                    <span className="text-xs text-mid-brown">
+                      / {pos.underlying_ticker}
+                    </span>
+                  )}
                 </div>
-              )}
-            </td>
-            <td className="py-2 px-3 text-right">{Number(h.qty).toLocaleString()}</td>
-            <td className="py-2 px-3 text-right">${Number(h.avg_cost).toFixed(2)}</td>
-            <td className="py-2 px-3 text-right">
-              {h.market_value_at_snapshot != null
-                ? `$${Number(h.market_value_at_snapshot).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                : "—"}
-            </td>
-            <td className="py-2 px-3">
-              <HoldingsBadge type={h.instrument_type} />
-            </td>
-          </tr>
-        ))}
+                {pos.instrument_type === "option" && (
+                  <div className="text-xs text-mid-brown">
+                    {pos.option_type?.toUpperCase()} ${pos.strike} exp {pos.expiry}
+                  </div>
+                )}
+              </td>
+              <td className="py-2 px-3 text-right">{Number(pos.qty).toLocaleString()}</td>
+              <td className="py-2 px-3 text-right">${Number(pos.avg_cost).toFixed(2)}</td>
+              <td className="py-2 px-3 text-right">
+                {pos.market_value != null
+                  ? `$${Number(pos.market_value).toLocaleString(undefined, {
+                      minimumFractionDigits: 2,
+                      maximumFractionDigits: 2,
+                    })}`
+                  : "—"}
+              </td>
+              <td
+                className={`py-2 px-3 text-right ${
+                  isPositive ? "text-green-700" : isNegative ? "text-red-700" : "text-ink"
+                }`}
+              >
+                {dayChgNum != null
+                  ? `${dayChgNum >= 0 ? "+" : ""}$${Math.abs(dayChgNum).toFixed(2)}`
+                  : "—"}
+              </td>
+              <td className="py-2 px-3">
+                <HoldingsBadge type={pos.instrument_type} />
+              </td>
+            </tr>
+          );
+        })}
       </tbody>
     </table>
   );
@@ -235,7 +254,9 @@ function CommitSnapshotForm({ onSuccess }) {
 export default function PortfolioPage() {
   const { data: accounts, isLoading: accountsLoading } = useAccounts();
   const [selectedAccountId, setSelectedAccountId] = useState(null);
-  const { data: holdings, isLoading: holdingsLoading, error } = usePortfolio(selectedAccountId);
+  const { data: portfolioData, isLoading: portfolioLoading, error } = usePortfolio(selectedAccountId);
+
+  const positions = portfolioData?.positions ?? [];
 
   return (
     <div>
@@ -252,6 +273,10 @@ export default function PortfolioPage() {
 
       <CommitSnapshotForm />
 
+      {selectedAccountId && portfolioData && (
+        <PortfolioHeroCard portfolio={portfolioData} />
+      )}
+
       <div className="bg-warm-white border-2 border-ink shadow-hard">
         <div className="px-4 py-3 border-b-2 border-ink">
           <h2 className="font-serif font-bold text-lg">
@@ -261,12 +286,12 @@ export default function PortfolioPage() {
             </span>
           </h2>
         </div>
-        {holdingsLoading ? (
+        {portfolioLoading ? (
           <div className="p-8 text-center text-mid-brown font-mono text-sm">Loading…</div>
         ) : error ? (
           <div className="p-8 text-center text-red-600 font-mono text-sm">{error.message}</div>
         ) : (
-          <HoldingsTable holdings={holdings ?? []} />
+          <HoldingsTable positions={positions} />
         )}
       </div>
     </div>

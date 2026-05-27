@@ -67,3 +67,41 @@ class PortfolioSnapshotResponse(BaseModel):
     total_value: Optional[Decimal]
     created_at: datetime
     holdings: list[HoldingResponse] = []
+
+
+class ComputedHoldingResponse(BaseModel):
+    """Live-marked holding returned by GET /api/portfolio. Mapped from the
+    engine's internal :class:`ComputedHolding` dataclass at the route boundary.
+    """
+
+    model_config = ConfigDict(from_attributes=False)
+
+    ticker: str
+    qty: Decimal
+    avg_cost: Decimal
+    instrument_type: str
+    market_value: Optional[Decimal] = None
+    day_change: Optional[Decimal] = None
+    option_type: Optional[str] = None
+    strike: Optional[Decimal] = None
+    expiry: Optional[date] = None
+    multiplier: Optional[int] = None
+    underlying_ticker: Optional[str] = None
+
+
+class PortfolioValueResponse(BaseModel):
+    """Response shape for GET /api/portfolio?account_id=…
+
+    ``market_value`` and ``day_change`` on positions are null when FMP
+    has no usable quote (e.g. options, missing tickers, or market closed).
+    ``total_value`` excludes positions whose market_value is null.
+    """
+
+    model_config = ConfigDict(from_attributes=False)
+
+    account_id: Optional[UUID]
+    last_snapshot_at: Optional[datetime]
+    cash_balance: Optional[Decimal]
+    total_value: Decimal
+    day_change: Decimal
+    positions: list[ComputedHoldingResponse] = []

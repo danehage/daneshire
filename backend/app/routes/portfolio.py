@@ -1,20 +1,24 @@
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.models.portfolio import Account, Holding, PortfolioSnapshot
+from app.routes.dependencies import get_portfolio_engine
 from app.schemas.portfolio import (
     AccountResponse,
-    HoldingResponse,
+    ComputedHoldingResponse,
     PortfolioSnapshotCommit,
     PortfolioSnapshotResponse,
+    PortfolioValueResponse,
 )
+from app.services.portfolio_engine import PortfolioEngine
 
 router = APIRouter(prefix="/api/portfolio", tags=["portfolio"])
 
@@ -26,48 +30,50 @@ async def list_accounts(db: AsyncSession = Depends(get_db)):
     return result.scalars().all()
 
 
-@router.get("", response_model=list[HoldingResponse])
+@router.get("", response_model=PortfolioValueResponse)
 async def get_portfolio(
     account_id: Optional[UUID] = Query(default=None),
-    db: AsyncSession = Depends(get_db),
+    engine: PortfolioEngine = Depends(get_portfolio_engine),
 ):
-    """Return the latest snapshot's holdings for an account (or all accounts if omitted)."""
-    if account_id is not None:
-        # Latest snapshot for the given account
-        snap_result = await db.execute(
-            select(PortfolioSnapshot)
-            .where(PortfolioSnapshot.account_id == account_id)
-            .order_by(PortfolioSnapshot.captured_at.desc())
-            .limit(1)
-        )
-        snapshot = snap_result.scalar_one_or_none()
-        if snapshot is None:
-            return []
-        snapshot_ids = [snapshot.id]
-    else:
-        # Latest snapshot per account
-        accounts_result = await db.execute(select(Account.id))
-        account_ids = accounts_result.scalars().all()
-        if not account_ids:
-            return []
-        snapshot_ids = []
-        for aid in account_ids:
-            snap_result = await db.execute(
-                select(PortfolioSnapshot.id)
-                .where(PortfolioSnapshot.account_id == aid)
-                .order_by(PortfolioSnapshot.captured_at.desc())
-                .limit(1)
-            )
-            sid = snap_result.scalar_one_or_none()
-            if sid is not None:
-                snapshot_ids.append(sid)
-        if not snapshot_ids:
-            return []
+    """Return live-marked portfolio value for an account.
 
-    holdings_result = await db.execute(
-        select(Holding).where(Holding.snapshot_id.in_(snapshot_ids))
+    When ``account_id`` is omitted the response has empty positions and
+    null metadata — the caller should select an account first.
+    """
+    if account_id is None:
+        return PortfolioValueResponse(
+            account_id=None,
+            last_snapshot_at=None,
+            cash_balance=None,
+            total_value=Decimal(0),
+            day_change=Decimal(0),
+            positions=[],
+        )
+
+    pv = await engine.portfolio_value(account_id)
+    return PortfolioValueResponse(
+        account_id=pv.account_id,
+        last_snapshot_at=pv.last_snapshot_at,
+        cash_balance=pv.cash_balance,
+        total_value=pv.total_value,
+        day_change=pv.day_change,
+        positions=[
+            ComputedHoldingResponse(
+                ticker=h.ticker,
+                qty=h.qty,
+                avg_cost=h.avg_cost,
+                instrument_type=h.instrument_type,
+                market_value=h.market_value,
+                day_change=h.day_change,
+                option_type=h.option_type,
+                strike=h.strike,
+                expiry=h.expiry,
+                multiplier=h.multiplier,
+                underlying_ticker=h.underlying_ticker,
+            )
+            for h in pv.positions
+        ],
     )
-    return holdings_result.scalars().all()
 
 
 @router.post("/snapshots/commit", response_model=PortfolioSnapshotResponse, status_code=201)
@@ -76,7 +82,6 @@ async def commit_snapshot(
     db: AsyncSession = Depends(get_db),
 ):
     """Persist a portfolio snapshot and its holdings. Lazily creates the Account if unknown."""
-    # Lazy account upsert
     acc_result = await db.execute(
         select(Account).where(Account.name == body.account_name)
     )
@@ -121,7 +126,6 @@ async def commit_snapshot(
 
     await db.commit()
 
-    # Reload with holdings for the response
     snap_result = await db.execute(
         select(PortfolioSnapshot)
         .options(selectinload(PortfolioSnapshot.holdings))

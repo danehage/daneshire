@@ -188,6 +188,91 @@ gcloud scheduler jobs create http alert-expire-stale \
 
 ---
 
+## 4b. Cloud Scheduler — Earnings Module
+
+Three additional jobs drive the earnings module: the calendar refresh,
+the daily IV snapshot, and the per-event alert check. They share the
+same `X-Scheduler-Secret` header pattern as the alert-engine jobs above.
+
+Prerequisites: `FINNHUB_API_KEY` and `TASTYTRADE_REMEMBER_TOKEN` must be
+provisioned in Secret Manager and bound to the Cloud Run service before
+the snapshot job will succeed (see env-vars table below).
+
+### Earnings calendar refresh (daily 10 PM ET)
+
+Pulls the next ~4 weeks of upcoming earnings events from Finnhub and
+upserts into `earnings_events`. Runs after US market close to capture
+any late additions for the next session.
+
+```bash
+gcloud scheduler jobs create http earnings-refresh-calendar \
+  --location us-central1 \
+  --schedule "0 22 * * *" \
+  --time-zone "America/New_York" \
+  --uri "${SERVICE_URL}/api/internal/earnings/refresh-calendar" \
+  --http-method POST \
+  --headers "X-Scheduler-Secret=${SCHEDULER_SECRET}" \
+  --attempt-deadline 120s
+```
+
+### IV snapshots (4:30 PM ET, weekdays)
+
+Writes one IV snapshot per `earnings-candidate`-tagged watchlist ticker
+into `iv_snapshots`. Runs 30 minutes after market close so end-of-day IV
+is settled.
+
+```bash
+gcloud scheduler jobs create http earnings-refresh-snapshots \
+  --location us-central1 \
+  --schedule "30 16 * * 1-5" \
+  --time-zone "America/New_York" \
+  --uri "${SERVICE_URL}/api/internal/earnings/refresh-snapshots" \
+  --http-method POST \
+  --headers "X-Scheduler-Secret=${SCHEDULER_SECRET}" \
+  --attempt-deadline 120s
+```
+
+### Earnings alert checks (5 PM ET, weekdays)
+
+Evaluates active `earnings_iv` alerts against the freshly-written
+snapshots. Runs after `earnings-refresh-snapshots` has had a chance to
+complete.
+
+```bash
+gcloud scheduler jobs create http earnings-run-alert-checks \
+  --location us-central1 \
+  --schedule "0 17 * * 1-5" \
+  --time-zone "America/New_York" \
+  --uri "${SERVICE_URL}/api/internal/alerts/run-earnings-checks" \
+  --http-method POST \
+  --headers "X-Scheduler-Secret=${SCHEDULER_SECRET}" \
+  --attempt-deadline 60s
+```
+
+### One-day smoke (after first deploy)
+
+After provisioning the three jobs, tag at least one watchlist item with
+the `earnings-candidate` tag so the snapshot job has work to do, then
+wait one full ET day cycle and verify:
+
+```bash
+# All three jobs succeeded most recently
+gcloud scheduler jobs list --location us-central1 \
+  --filter "name~earnings" \
+  --format "table(name, state, lastAttemptTime, status.code)"
+
+# Tail recent invocation logs
+gcloud logging read \
+  'resource.type=cloud_scheduler_job AND resource.labels.job_id~earnings' \
+  --limit 20 --format "value(timestamp, resource.labels.job_id, jsonPayload.status)"
+```
+
+Acceptance: each job returns 2xx; at least one row in `earnings_events`
+and `iv_snapshots`; no error rows in `alert_history` for alert_type
+`earnings_iv` (zero rows is acceptable if no matching alerts exist yet).
+
+---
+
 ## 5. Verify Deployment
 
 ```bash
@@ -210,6 +295,8 @@ curl -X POST ${SERVICE_URL}/api/internal/health \
 |----------|-------------|----------|
 | `NEON_DATABASE_URL` | Postgres connection string | Yes |
 | `FMP_API_KEY` | Financial Modeling Prep API key | Yes |
+| `FINNHUB_API_KEY` | Finnhub API key (earnings calendar) | Yes (earnings) |
+| `TASTYTRADE_REMEMBER_TOKEN` | Tastytrade session token (IV snapshots) | Yes (earnings) |
 | `PUSHOVER_USER_KEY` | Pushover user key for notifications | Yes |
 | `PUSHOVER_API_TOKEN` | Pushover app token | Yes |
 | `SCHEDULER_SECRET` | Secret for internal endpoints | Yes |
@@ -234,7 +321,7 @@ gcloud run deploy danecast-trades --image gcr.io/YOUR_PROJECT_ID/danecast-trades
 ## Costs (Estimated)
 
 - **Cloud Run**: Scales to zero, ~$0 when idle. With light usage, < $5/month.
-- **Cloud Scheduler**: 3 free jobs, then $0.10/job/month. ~$0.40/month for 4 jobs.
+- **Cloud Scheduler**: 3 free jobs, then $0.10/job/month. ~$0.40/month for 7 jobs.
 - **Secret Manager**: 6 free active secrets, then $0.06/secret/month. ~$0.
 - **Neon Postgres**: Free tier includes 0.5 GB storage, 3 GB transfer.
 - **Total**: Likely < $5/month for single-user usage.

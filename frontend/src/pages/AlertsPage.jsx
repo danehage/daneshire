@@ -17,6 +17,7 @@ const STATUS_TABS = [
 const ALERT_TYPES = [
   { value: "price_cross", label: "Price Cross" },
   { value: "technical_signal", label: "Technical Signal" },
+  { value: "earnings_iv", label: "Earnings IV" },
   { value: "date_reminder", label: "Date Reminder" },
 ];
 
@@ -74,25 +75,36 @@ function CreateAlertForm({ onClose }) {
   const [metric, setMetric] = useState("price");
   const [operator, setOperator] = useState(">");
   const [value, setValue] = useState("");
+  const [daysBefore, setDaysBefore] = useState("5");
   const [actionNote, setActionNote] = useState("");
   const [priority, setPriority] = useState("normal");
 
   const createAlert = useCreateAlert();
+  const isEarningsIV = alertType === "earnings_iv";
 
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!ticker.trim() || !name.trim() || !value) return;
+    if (isEarningsIV && daysBefore === "") return;
+
+    const condition = isEarningsIV
+      ? {
+          value: parseFloat(value),
+          days_before: parseInt(daysBefore, 10),
+          operator,
+        }
+      : {
+          metric,
+          operator,
+          value: parseFloat(value),
+        };
 
     createAlert.mutate(
       {
         ticker: ticker.trim().toUpperCase(),
         name: name.trim(),
         alert_type: alertType,
-        condition: {
-          metric,
-          operator,
-          value: parseFloat(value),
-        },
+        condition,
         action_note: actionNote.trim() || null,
         priority,
       },
@@ -158,22 +170,41 @@ function CreateAlertForm({ onClose }) {
       </div>
 
       <div className="grid grid-cols-3 gap-4 mb-4">
-        <div>
-          <label className="block text-xs font-medium uppercase tracking-wide text-dark-brown mb-1">
-            Metric
-          </label>
-          <select
-            value={metric}
-            onChange={(e) => setMetric(e.target.value)}
-            className="w-full px-3 py-2 border-2 border-ink bg-warm-white"
-          >
-            {METRICS.map((m) => (
-              <option key={m.value} value={m.value}>
-                {m.label}
-              </option>
-            ))}
-          </select>
-        </div>
+        {isEarningsIV ? (
+          <div>
+            <label className="block text-xs font-medium uppercase tracking-wide text-dark-brown mb-1">
+              Days Before
+            </label>
+            <input
+              type="number"
+              min="0"
+              max="60"
+              step="1"
+              value={daysBefore}
+              onChange={(e) => setDaysBefore(e.target.value)}
+              placeholder="5"
+              className="w-full px-3 py-2 border-2 border-ink bg-warm-white font-mono"
+              required
+            />
+          </div>
+        ) : (
+          <div>
+            <label className="block text-xs font-medium uppercase tracking-wide text-dark-brown mb-1">
+              Metric
+            </label>
+            <select
+              value={metric}
+              onChange={(e) => setMetric(e.target.value)}
+              className="w-full px-3 py-2 border-2 border-ink bg-warm-white"
+            >
+              {METRICS.map((m) => (
+                <option key={m.value} value={m.value}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
 
         <div>
           <label className="block text-xs font-medium uppercase tracking-wide text-dark-brown mb-1">
@@ -194,14 +225,16 @@ function CreateAlertForm({ onClose }) {
 
         <div>
           <label className="block text-xs font-medium uppercase tracking-wide text-dark-brown mb-1">
-            Value
+            {isEarningsIV ? "IV Rank" : "Value"}
           </label>
           <input
             type="number"
             step="any"
             value={value}
             onChange={(e) => setValue(e.target.value)}
-            placeholder={metric === "price" ? "200.00" : "30"}
+            placeholder={
+              isEarningsIV ? "60" : metric === "price" ? "200.00" : "30"
+            }
             className="w-full px-3 py-2 border-2 border-ink bg-warm-white font-mono"
             required
           />

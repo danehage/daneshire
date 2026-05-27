@@ -39,7 +39,7 @@ async def list_alerts(
     ticker: Optional[str] = Query(default=None, max_length=10),
     alert_type: Optional[str] = Query(
         default=None,
-        pattern="^(price_cross|earnings_check|date_reminder|technical_signal|custom)$",
+        pattern="^(price_cross|earnings_iv|date_reminder|technical_signal|custom)$",
     ),
     db: AsyncSession = Depends(get_db),
 ):

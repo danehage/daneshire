@@ -28,8 +28,11 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.alert import Alert, AlertHistory
+from app.models.earnings import EarningsEvent
+from app.models.iv_snapshots import IVSnapshot
 from app.schemas.alert_conditions import (
     Condition,
+    EarningsIVObservation,
     Errored,
     Met,
     NotMet,
@@ -62,14 +65,14 @@ async def _default_notifier(alert: Alert, condition: Condition, outcome: Met) ->
     )
 
 
-# Alert types the engine knows how to evaluate today. ``earnings_check``
-# and ``custom`` exist in the model but currently short-circuit to
-# Errored — see ``_observations_for``.
+# Alert types the engine knows how to evaluate today. ``custom`` exists
+# in the model but currently short-circuits to Errored — see
+# ``_observations_for``.
 KNOWN_ALERT_TYPES: tuple[str, ...] = (
     "price_cross",
     "technical_signal",
     "date_reminder",
-    "earnings_check",
+    "earnings_iv",
     "custom",
 )
 
@@ -215,7 +218,7 @@ class AlertEngine:
         """Batch-fetch observations keyed by upper-case ticker.
 
         Returns ``None`` for alert types we structurally don't evaluate
-        today (``earnings_check``, ``custom``) so the per-alert loop can
+        today (``custom``) so the per-alert loop can
         produce :class:`Errored` outcomes.
         """
         tickers = sorted({alert.ticker.upper() for alert in alerts})
@@ -231,13 +234,59 @@ class AlertEngine:
                 # No external data — gating happens against today's date
                 # inside ``_evaluate_one``.
                 return {ticker: None for ticker in tickers}
-            case "earnings_check" | "custom":
+            case "earnings_iv":
+                return await self._earnings_iv_observations(tickers)
+            case "custom":
                 return None
             case _:
                 # Defensive: KNOWN_ALERT_TYPES guards the public entry
                 # points, so reaching here means a caller built a custom
                 # type. Treat the whole batch as not-yet-implemented.
                 return None
+
+    async def _earnings_iv_observations(
+        self, tickers: list[str]
+    ) -> dict[str, EarningsIVObservation]:
+        """Build per-ticker observations from the DB.
+
+        Combines the latest ``iv_snapshots`` row with the next future
+        ``earnings_events`` row. Either side may be missing — the pure
+        evaluator handles that case as ``NotMet`` with no actual value.
+        """
+        today = self._now().date()
+
+        # Latest IV snapshot per ticker (Postgres DISTINCT ON).
+        latest_iv_stmt = (
+            select(IVSnapshot.ticker, IVSnapshot.iv_rank)
+            .where(IVSnapshot.ticker.in_(tickers))
+            .order_by(IVSnapshot.ticker, IVSnapshot.snapshot_date.desc())
+            .distinct(IVSnapshot.ticker)
+        )
+        iv_rows = (await self.db.execute(latest_iv_stmt)).all()
+        iv_by_ticker: dict[str, float] = {
+            row.ticker: float(row.iv_rank) for row in iv_rows
+        }
+
+        # Next future earnings event per ticker.
+        next_event_stmt = (
+            select(EarningsEvent.ticker, EarningsEvent.report_date)
+            .where(EarningsEvent.ticker.in_(tickers))
+            .where(EarningsEvent.report_date >= today)
+            .order_by(EarningsEvent.ticker, EarningsEvent.report_date.asc())
+            .distinct(EarningsEvent.ticker)
+        )
+        event_rows = (await self.db.execute(next_event_stmt)).all()
+        days_by_ticker: dict[str, int] = {
+            row.ticker: (row.report_date - today).days for row in event_rows
+        }
+
+        return {
+            ticker: EarningsIVObservation(
+                iv_rank=iv_by_ticker.get(ticker),
+                days_until_earnings=days_by_ticker.get(ticker),
+            )
+            for ticker in tickers
+        }
 
     def _evaluate_one(
         self, alert: Alert, observations: Optional[dict[str, Any]]

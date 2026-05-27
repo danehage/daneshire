@@ -62,7 +62,7 @@ class Alert(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "alert_type IN ('price_cross', 'earnings_check', 'date_reminder', "
+            "alert_type IN ('price_cross', 'earnings_iv', 'date_reminder', "
             "'technical_signal', 'custom')",
             name="valid_alert_type",
         ),

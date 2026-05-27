@@ -333,13 +333,8 @@ async def test_create_alert_types(client: AsyncClient):
     cases = [
         ("price_cross", {"metric": "price", "operator": ">", "value": 200}),
         (
-            "earnings_check",
-            {
-                "metric": "eps",
-                "operator": ">",
-                "value": 4.0,
-                "trigger_date": "2026-06-01",
-            },
+            "earnings_iv",
+            {"value": 60.0, "days_before": 5, "operator": ">="},
         ),
         ("date_reminder", {"trigger_date": "2026-06-01"}),
         ("technical_signal", {"metric": "rsi", "operator": "<", "value": 30}),

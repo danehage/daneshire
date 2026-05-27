@@ -191,3 +191,45 @@ class EarningsTradeResponse(BaseModel):
 
     created_at: datetime
     updated_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# Per-ticker aggregate view (issue #20)
+# ---------------------------------------------------------------------------
+
+
+class IVSnapshotResponse(BaseModel):
+    """Most recent IV snapshot for a ticker."""
+
+    snapshot_date: date
+    iv30: Decimal
+    iv_rank: Decimal
+    expected_move_pct: Decimal
+    source: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RealizedMoveHistoryItem(BaseModel):
+    """One past earnings event with a recorded realized move."""
+
+    report_date: date
+    realized_move_pct: Decimal
+
+
+class TickerEarningsResponse(BaseModel):
+    """Aggregate per-ticker earnings view: next event, latest IV snapshot,
+    last N quarters of realized moves, edge ratio + historical avg, and
+    the most recent earnings trades for the ticker. Every subsection is
+    nullable / possibly empty — the response shape is always the same.
+    """
+
+    ticker: str
+    event: Optional[EarningsEventResponse] = None
+    latest_iv_snapshot: Optional[IVSnapshotResponse] = None
+    realized_move_history: list[RealizedMoveHistoryItem] = []
+    historical_avg_realized_move_pct: Optional[Decimal] = None
+    edge_ratio: Optional[Decimal] = None
+    recent_trades: list[EarningsTradeResponse] = []
+
+    model_config = ConfigDict(from_attributes=True)

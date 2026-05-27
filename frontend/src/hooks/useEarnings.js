@@ -3,6 +3,7 @@ import {
   getEarningsCalendar,
   getEarningsScreen,
   getEarningsExpectedMove,
+  getTickerEarnings,
   getEarningsTrades,
   createEarningsTrade,
   updateEarningsTrade,
@@ -34,6 +35,14 @@ export function useEarningsExpectedMove(ticker) {
   return useQuery({
     queryKey: ['earnings', 'expectedMove', ticker],
     queryFn: () => getEarningsExpectedMove(ticker),
+    enabled: Boolean(ticker),
+  });
+}
+
+export function useTickerEarnings(ticker) {
+  return useQuery({
+    queryKey: ['earnings', 'ticker', ticker],
+    queryFn: () => getTickerEarnings(ticker),
     enabled: Boolean(ticker),
   });
 }

@@ -35,6 +35,12 @@ export async function getEarningsExpectedMove(ticker) {
   return res.json();
 }
 
+export async function getTickerEarnings(ticker) {
+  const res = await fetch(`${API_BASE}/api/earnings/${encodeURIComponent(ticker)}`);
+  if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`);
+  return res.json();
+}
+
 // ---------------------------------------------------------------------------
 // Earnings trades CRUD (issue #16)
 // ---------------------------------------------------------------------------

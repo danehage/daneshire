@@ -2,6 +2,7 @@ import { useParams, Link } from "react-router-dom";
 import { useTickerAnalysis, useTickerWatchlistItem } from "../hooks/useTicker";
 import { useCreateWatchlistItem } from "../hooks/useWatchlist";
 import TargetsAndJournal from "../components/TargetsAndJournal";
+import EarningsCard from "../components/EarningsCard";
 
 function SignalBadge({ signal }) {
   let colorClass = "bg-warm-white text-dark-brown border-light-brown";
@@ -345,6 +346,9 @@ export default function TickerDetailPage() {
           </div>
         </div>
       </div>
+
+      {/* Earnings — embedded between analysis and journal (issue #20) */}
+      <EarningsCard ticker={symbol.toUpperCase()} />
 
       {/* Watchlist Data (if on watchlist) */}
       {watchlistItem && (

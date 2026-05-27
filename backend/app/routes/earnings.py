@@ -32,6 +32,9 @@ from app.schemas.earnings import (
     EarningsTradeCreate,
     EarningsTradeResponse,
     EarningsTradeUpdate,
+    IVSnapshotResponse,
+    RealizedMoveHistoryItem,
+    TickerEarningsResponse,
     TradeStatus,
 )
 from app.services.market import MarketData, MarketDataError, get_market
@@ -451,3 +454,119 @@ async def delete_earnings_trade(
             trade.updated_at = datetime.now(timezone.utc)
 
     await db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Per-ticker aggregate (issue #20)
+#
+# This route is a catch-all on `/{ticker}` and MUST stay below all the
+# literal-prefix routes above (`/calendar`, `/screen`, `/trades`,
+# `/{ticker}/expected-move`). FastAPI matches in declaration order.
+# ---------------------------------------------------------------------------
+
+
+_REALIZED_MOVE_HISTORY_LIMIT = 8
+_RECENT_TRADES_LIMIT = 5
+
+
+@router.get("/{ticker}", response_model=TickerEarningsResponse)
+async def get_ticker_earnings(
+    ticker: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Aggregate earnings view for one ticker.
+
+    Returns the next upcoming earnings event (if any), the most recent IV
+    snapshot, up to the last 8 quarters of realized moves, the
+    historical average + edge ratio (null when < 4 past quarters per
+    ADR-0003), and the 5 most recent earnings trades. Every subsection
+    is independently optional — empty/null when there's no source data.
+    """
+    symbol = ticker.upper()
+    today = date.today()
+
+    # Next upcoming earnings event (today or later), ascending.
+    event_stmt = (
+        select(EarningsEvent)
+        .where(EarningsEvent.ticker == symbol)
+        .where(EarningsEvent.report_date >= today)
+        .order_by(EarningsEvent.report_date.asc())
+        .limit(1)
+    )
+    event = (await db.execute(event_stmt)).scalars().first()
+
+    # Most recent IV snapshot.
+    snap_stmt = (
+        select(IVSnapshot)
+        .where(IVSnapshot.ticker == symbol)
+        .order_by(IVSnapshot.snapshot_date.desc())
+        .limit(1)
+    )
+    snapshot = (await db.execute(snap_stmt)).scalars().first()
+
+    # Last N quarters of realized moves (past events with the column set).
+    hist_stmt = (
+        select(EarningsEvent.report_date, EarningsEvent.realized_move_pct)
+        .where(EarningsEvent.ticker == symbol)
+        .where(EarningsEvent.report_date < today)
+        .where(EarningsEvent.realized_move_pct.isnot(None))
+        .order_by(EarningsEvent.report_date.desc())
+        .limit(_REALIZED_MOVE_HISTORY_LIMIT)
+    )
+    history_rows = (await db.execute(hist_stmt)).all()
+    realized_move_history = [
+        RealizedMoveHistoryItem(
+            report_date=row.report_date,
+            realized_move_pct=row.realized_move_pct,
+        )
+        for row in history_rows
+    ]
+
+    # Historical avg + edge ratio — same null rules as ADR-0003 / #19.
+    historical_avg: Optional[Decimal] = None
+    edge_ratio: Optional[Decimal] = None
+    quarters_used = len(history_rows)
+    if quarters_used >= _MIN_QUARTERS_FOR_EDGE:
+        avg_value = sum(float(r.realized_move_pct) for r in history_rows) / quarters_used
+        historical_avg = Decimal(str(avg_value))
+        if (
+            snapshot is not None
+            and snapshot.expected_move_pct is not None
+            and float(historical_avg) > 0
+        ):
+            edge_ratio = Decimal(
+                str(float(snapshot.expected_move_pct) / float(historical_avg))
+            )
+
+    # Build the embedded EarningsEventResponse with the same joined fields
+    # used by /calendar (latest IV + historical avg + edge ratio).
+    event_response: Optional[EarningsEventResponse] = None
+    if event is not None:
+        event_response = _make_response(
+            event,
+            iv_rank=(snapshot.iv_rank if snapshot else None),
+            expected_move_pct=(snapshot.expected_move_pct if snapshot else None),
+            avg_move=historical_avg,
+            quarters_used=quarters_used,
+        )
+
+    # 5 most recent trades for the ticker (any status).
+    trades_stmt = (
+        select(EarningsTrade)
+        .where(EarningsTrade.ticker == symbol)
+        .order_by(EarningsTrade.entry_date.desc(), EarningsTrade.created_at.desc())
+        .limit(_RECENT_TRADES_LIMIT)
+    )
+    recent_trades = (await db.execute(trades_stmt)).scalars().all()
+
+    return TickerEarningsResponse(
+        ticker=symbol,
+        event=event_response,
+        latest_iv_snapshot=(
+            IVSnapshotResponse.model_validate(snapshot) if snapshot else None
+        ),
+        realized_move_history=realized_move_history,
+        historical_avg_realized_move_pct=historical_avg,
+        edge_ratio=edge_ratio,
+        recent_trades=[EarningsTradeResponse.model_validate(t) for t in recent_trades],
+    )

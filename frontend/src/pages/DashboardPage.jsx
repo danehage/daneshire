@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useDashboardSummary } from "../hooks/useDashboard";
 import { useJournalSearch } from "../hooks/useJournal";
+import { useAccounts, usePortfolio } from "../hooks/usePortfolio";
+import PortfolioSummaryCard from "../components/portfolio/PortfolioSummaryCard";
 
 const ENTRY_TYPE_COLORS = {
   thesis: "bg-accent text-warm-white",
@@ -216,6 +218,9 @@ function SearchResultRow({ entry }) {
 
 export default function DashboardPage() {
   const { data, isLoading, error } = useDashboardSummary();
+  const { data: accounts } = useAccounts();
+  const firstAccountId = accounts?.[0]?.id ?? null;
+  const { data: portfolioData } = usePortfolio(firstAccountId);
 
   if (isLoading) {
     return (
@@ -232,6 +237,7 @@ export default function DashboardPage() {
   }
 
   const { watchlist, alerts, recent_journal } = data;
+  const portfolioForCard = firstAccountId && portfolioData ? portfolioData : null;
 
   return (
     <div className="space-y-8">
@@ -251,7 +257,8 @@ export default function DashboardPage() {
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+        <PortfolioSummaryCard portfolio={portfolioForCard} />
         <SummaryCard
           title="Watching"
           value={watchlist.watching}

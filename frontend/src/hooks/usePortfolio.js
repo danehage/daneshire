@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getAccounts, getPortfolio, commitSnapshot, commitTrade, getTrades } from "../api/portfolio";
+import { getAccounts, getPortfolio, commitSnapshot, commitTrade, getTrades, getValueHistory } from "../api/portfolio";
 
 export function useAccounts() {
   return useQuery({
@@ -39,5 +39,12 @@ export function useTrades(filters) {
   return useQuery({
     queryKey: ["portfolio", "trades", filters],
     queryFn: () => getTrades(filters),
+  });
+}
+
+export function useValueHistory(accountId) {
+  return useQuery({
+    queryKey: ["portfolio", "value-history", accountId],
+    queryFn: () => getValueHistory(accountId),
   });
 }

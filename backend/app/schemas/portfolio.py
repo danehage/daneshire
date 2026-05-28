@@ -1,6 +1,6 @@
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -143,3 +143,27 @@ class PortfolioValueResponse(BaseModel):
     total_value: Decimal
     day_change: Decimal
     positions: list[ComputedHoldingResponse] = []
+
+
+class ValueHistoryPoint(BaseModel):
+    """One point in the portfolio value-over-time series.
+
+    ``source="snapshot"`` means the value came from a persisted snapshot row.
+    ``source="current"`` means the value was computed live from PortfolioEngine.
+    """
+
+    model_config = ConfigDict(from_attributes=False)
+
+    timestamp: datetime
+    total_value: Decimal
+    cash_balance: Optional[Decimal] = None
+    source: Literal["snapshot", "current"]
+
+
+class ValueHistoryResponse(BaseModel):
+    """Response shape for GET /api/portfolio/value-history?account_id=…"""
+
+    model_config = ConfigDict(from_attributes=False)
+
+    account_id: Optional[UUID]
+    points: list[ValueHistoryPoint] = []

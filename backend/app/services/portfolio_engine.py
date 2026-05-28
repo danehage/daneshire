@@ -12,7 +12,7 @@ Issue #9: layered current_holdings (snapshot + trades since captured_at) +
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Optional
 from uuid import UUID
@@ -59,6 +59,20 @@ class PortfolioValue:
 class TradeResult:
     trade_row: Trade
     warnings: list[str]
+
+
+@dataclass
+class ValueHistoryPoint:
+    timestamp: datetime
+    total_value: Decimal
+    cash_balance: Optional[Decimal]
+    source: str  # "snapshot" | "current"
+
+
+@dataclass
+class ValueHistory:
+    account_id: UUID
+    points: list[ValueHistoryPoint] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -342,3 +356,41 @@ class PortfolioEngine:
             total_value=positions_value + cash,
             day_change=total_day_change,
         )
+
+    async def value_history(self, account_id: UUID) -> ValueHistory:
+        """Sparse portfolio value history: all snapshot points + a live current point.
+
+        Returns an empty list when no snapshots exist (no current point is added
+        when there is no baseline to mark against).
+        """
+        snaps_result = await self.db.execute(
+            select(PortfolioSnapshot)
+            .where(PortfolioSnapshot.account_id == account_id)
+            .order_by(PortfolioSnapshot.captured_at.asc())
+        )
+        snapshots = list(snaps_result.scalars().all())
+
+        if not snapshots:
+            return ValueHistory(account_id=account_id, points=[])
+
+        points = [
+            ValueHistoryPoint(
+                timestamp=snap.captured_at,
+                total_value=snap.total_value or Decimal(0),
+                cash_balance=snap.cash_balance,
+                source="snapshot",
+            )
+            for snap in snapshots
+        ]
+
+        pv = await self.portfolio_value(account_id)
+        points.append(
+            ValueHistoryPoint(
+                timestamp=datetime.now(timezone.utc),
+                total_value=pv.total_value,
+                cash_balance=pv.cash_balance,
+                source="current",
+            )
+        )
+
+        return ValueHistory(account_id=account_id, points=points)

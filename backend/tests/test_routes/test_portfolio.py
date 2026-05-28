@@ -5,6 +5,7 @@ Updated to assert the new PortfolioValueResponse shape from GET /api/portfolio.
 is null on all positions in these tests — that is expected and tested.
 """
 
+import io
 import pytest
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -12,7 +13,15 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import delete
 
+from app.main import app
 from app.models.portfolio import Account, PortfolioSnapshot, Holding, Trade
+from app.routes.dependencies import get_vision_parser
+from app.schemas.portfolio_parsing import ParsedPortfolioSnapshot, ParsedPosition
+from app.services.vision_parser import (
+    VisionLowConfidence,
+    VisionRateLimited,
+    VisionUpstreamError,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -533,3 +542,245 @@ async def test_get_value_history_multiple_snapshots_ordered(client: AsyncClient)
     t1 = datetime.fromisoformat(points[1]["timestamp"].replace("Z", "+00:00"))
     t2 = datetime.fromisoformat(points[2]["timestamp"].replace("Z", "+00:00"))
     assert t0 < t1 < t2
+
+
+# ---------------------------------------------------------------------------
+# POST /api/portfolio/snapshots/parse — VisionParser tests
+# ---------------------------------------------------------------------------
+
+_CANNED_SNAPSHOT = ParsedPortfolioSnapshot(
+    account_name="Taxable",
+    account_type="individual",
+    captured_at=datetime(2026, 5, 21, 12, 0, 0, tzinfo=timezone.utc),
+    cash_balance=Decimal("5000.00"),
+    parsed_total_value=Decimal("25000.00"),
+    confidence=0.95,
+    positions=[
+        ParsedPosition(
+            instrument_type="equity",
+            ticker="AAPL",
+            qty=Decimal("10"),
+            avg_cost=Decimal("180.00"),
+            market_value=Decimal("1900.00"),
+        ),
+        ParsedPosition(
+            instrument_type="equity",
+            ticker="MSFT",
+            qty=Decimal("5"),
+            avg_cost=Decimal("400.00"),
+            market_value=Decimal("2100.00"),
+        ),
+    ],
+)
+
+
+class _FakeVisionParser:
+    """Controllable stand-in for VisionParser used in parse-endpoint tests."""
+
+    def __init__(self, result=None, error=None):
+        self._result = result
+        self._error = error
+
+    async def parse_portfolio(self, image_bytes, account_hint=None):
+        if self._error is not None:
+            raise self._error
+        return self._result or _CANNED_SNAPSHOT
+
+
+def _fake_image_upload():
+    return ("image", io.BytesIO(b"fake-png-bytes"), "image/png")
+
+
+@pytest.fixture
+def fake_parser_client(client: AsyncClient):
+    """Client with a FakeVisionParser that returns _CANNED_SNAPSHOT."""
+    app.dependency_overrides[get_vision_parser] = lambda: _FakeVisionParser()
+    yield client
+    # conftest.py already calls app.dependency_overrides.clear() in teardown,
+    # but we reset proactively so this fixture is composable.
+    app.dependency_overrides.pop(get_vision_parser, None)
+
+
+@pytest.mark.asyncio
+async def test_parse_snapshot_returns_diff(fake_parser_client: AsyncClient):
+    """POST /snapshots/parse returns SnapshotDiffResponse with no DB writes."""
+    response = await fake_parser_client.post(
+        "/api/portfolio/snapshots/parse",
+        files={"image": _fake_image_upload()},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert "position_diffs" in data
+    assert "parsed_snapshot" in data
+    assert data["parsed_snapshot"]["account_name"] == "Taxable"
+    assert len(data["position_diffs"]) == 2
+    # All new — no pre-existing snapshot in DB
+    for diff in data["position_diffs"]:
+        assert diff["status"] == "new"
+
+
+@pytest.mark.asyncio
+async def test_parse_snapshot_no_db_writes(
+    fake_parser_client: AsyncClient, db_session: AsyncSession
+):
+    """POST /snapshots/parse is stateless: no Account or Snapshot rows created."""
+    before_accounts = (
+        await db_session.execute(
+            __import__("sqlalchemy", fromlist=["select"]).select(Account)
+        )
+    ).scalars().all()
+
+    await fake_parser_client.post(
+        "/api/portfolio/snapshots/parse",
+        files={"image": _fake_image_upload()},
+    )
+
+    after_accounts = (
+        await db_session.execute(
+            __import__("sqlalchemy", fromlist=["select"]).select(Account)
+        )
+    ).scalars().all()
+    assert len(before_accounts) == len(after_accounts)
+
+
+@pytest.mark.asyncio
+async def test_parse_snapshot_low_confidence_returns_422(client: AsyncClient):
+    """VisionLowConfidence from the parser maps to HTTP 422."""
+    app.dependency_overrides[get_vision_parser] = lambda: _FakeVisionParser(
+        error=VisionLowConfidence("Confidence 0.40 below threshold 0.60")
+    )
+    try:
+        response = await client.post(
+            "/api/portfolio/snapshots/parse",
+            files={"image": _fake_image_upload()},
+        )
+        assert response.status_code == 422
+    finally:
+        app.dependency_overrides.pop(get_vision_parser, None)
+
+
+@pytest.mark.asyncio
+async def test_parse_snapshot_rate_limited_returns_429(client: AsyncClient):
+    """VisionRateLimited from the parser maps to HTTP 429."""
+    app.dependency_overrides[get_vision_parser] = lambda: _FakeVisionParser(
+        error=VisionRateLimited("Rate limit exceeded")
+    )
+    try:
+        response = await client.post(
+            "/api/portfolio/snapshots/parse",
+            files={"image": _fake_image_upload()},
+        )
+        assert response.status_code == 429
+    finally:
+        app.dependency_overrides.pop(get_vision_parser, None)
+
+
+@pytest.mark.asyncio
+async def test_parse_snapshot_upstream_error_returns_502(client: AsyncClient):
+    """VisionUpstreamError from the parser maps to HTTP 502."""
+    app.dependency_overrides[get_vision_parser] = lambda: _FakeVisionParser(
+        error=VisionUpstreamError("Gemini returned malformed response")
+    )
+    try:
+        response = await client.post(
+            "/api/portfolio/snapshots/parse",
+            files={"image": _fake_image_upload()},
+        )
+        assert response.status_code == 502
+    finally:
+        app.dependency_overrides.pop(get_vision_parser, None)
+
+
+@pytest.mark.asyncio
+async def test_parse_then_commit_round_trip(fake_parser_client: AsyncClient):
+    """Parse returns a snapshot; frontend calls commit with the same payload; persisted."""
+    parse_resp = await fake_parser_client.post(
+        "/api/portfolio/snapshots/parse",
+        files={"image": _fake_image_upload()},
+    )
+    assert parse_resp.status_code == 200
+    parsed = parse_resp.json()["parsed_snapshot"]
+
+    commit_payload = {
+        "account_name": parsed["account_name"],
+        "account_type": parsed.get("account_type"),
+        "captured_at": parsed["captured_at"],
+        "cash_balance": parsed.get("cash_balance"),
+        "total_value": parsed.get("parsed_total_value"),
+        "positions": [
+            {
+                "instrument_type": pos["instrument_type"],
+                "ticker": pos["ticker"],
+                "qty": pos["qty"],
+                "avg_cost": pos["avg_cost"] if pos.get("avg_cost") is not None else "0",
+                "market_value_at_snapshot": pos.get("market_value"),
+            }
+            for pos in parsed["positions"]
+        ],
+    }
+    commit_resp = await fake_parser_client.post(
+        "/api/portfolio/snapshots/commit", json=commit_payload
+    )
+    assert commit_resp.status_code == 201
+    committed = commit_resp.json()
+    assert len(committed["holdings"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_parse_snapshot_diff_classification(fake_parser_client: AsyncClient):
+    """Diff returns unchanged/changed/new/removed correctly vs existing snapshot."""
+    # First commit a snapshot with AAPL(10) + MSFT(5)
+    await fake_parser_client.post(
+        "/api/portfolio/snapshots/commit",
+        json={
+            "account_name": "Taxable",
+            "account_type": "individual",
+            "captured_at": "2026-05-20T12:00:00Z",
+            "positions": [
+                {"instrument_type": "equity", "ticker": "AAPL", "qty": "10", "avg_cost": "180.00"},
+                {"instrument_type": "equity", "ticker": "MSFT", "qty": "5", "avg_cost": "400.00"},
+                {"instrument_type": "equity", "ticker": "GOOGL", "qty": "2", "avg_cost": "170.00"},
+            ],
+        },
+    )
+
+    # Parsed snapshot: AAPL unchanged, MSFT qty changed, GOOGL removed, NVDA new
+    custom_snapshot = ParsedPortfolioSnapshot(
+        account_name="Taxable",
+        account_type="individual",
+        captured_at=datetime(2026, 5, 21, 12, 0, 0, tzinfo=timezone.utc),
+        confidence=0.95,
+        positions=[
+            ParsedPosition(instrument_type="equity", ticker="AAPL", qty=Decimal("10"), avg_cost=Decimal("180.00")),
+            ParsedPosition(instrument_type="equity", ticker="MSFT", qty=Decimal("7"), avg_cost=Decimal("400.00")),
+            ParsedPosition(instrument_type="equity", ticker="NVDA", qty=Decimal("3"), avg_cost=Decimal("900.00")),
+        ],
+    )
+    app.dependency_overrides[get_vision_parser] = lambda: _FakeVisionParser(result=custom_snapshot)
+    try:
+        resp = await fake_parser_client.post(
+            "/api/portfolio/snapshots/parse",
+            files={"image": _fake_image_upload()},
+        )
+        assert resp.status_code == 200
+        diffs = {d["ticker"]: d["status"] for d in resp.json()["position_diffs"]}
+        assert diffs["AAPL"] == "unchanged"
+        assert diffs["MSFT"] == "changed"
+        assert diffs["NVDA"] == "new"
+        assert diffs["GOOGL"] == "removed"
+    finally:
+        app.dependency_overrides.pop(get_vision_parser, None)
+
+
+@pytest.mark.asyncio
+async def test_parse_snapshot_no_parser_configured(client: AsyncClient):
+    """When vision_parser is None (not configured), /parse returns 503."""
+    app.dependency_overrides[get_vision_parser] = lambda: None
+    try:
+        response = await client.post(
+            "/api/portfolio/snapshots/parse",
+            files={"image": _fake_image_upload()},
+        )
+        assert response.status_code == 503
+    finally:
+        app.dependency_overrides.pop(get_vision_parser, None)

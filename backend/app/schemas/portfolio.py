@@ -5,6 +5,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.schemas.portfolio_parsing import ParsedPortfolioSnapshot
+
 
 class TradeCommit(BaseModel):
     account_id: UUID
@@ -167,3 +169,37 @@ class ValueHistoryResponse(BaseModel):
 
     account_id: Optional[UUID]
     points: list[ValueHistoryPoint] = []
+
+
+class PositionDiff(BaseModel):
+    """Per-position diff between parsed snapshot and current computed holdings."""
+
+    model_config = ConfigDict(from_attributes=False)
+
+    ticker: str
+    instrument_type: str
+    status: Literal["new", "changed", "removed", "unchanged"]
+    parsed_qty: Optional[Decimal] = None
+    computed_qty: Optional[Decimal] = None
+    parsed_avg_cost: Optional[Decimal] = None
+    computed_avg_cost: Optional[Decimal] = None
+    parsed_market_value: Optional[Decimal] = None
+    computed_market_value: Optional[Decimal] = None
+
+
+class SnapshotDiffResponse(BaseModel):
+    """Response from POST /api/portfolio/snapshots/parse.
+
+    ``account_id`` is null when the parsed account name does not match any
+    known account — the frontend should offer a "create new account" option.
+    ``totals_match`` uses a tolerance of ±$1 to absorb rounding.
+    """
+
+    model_config = ConfigDict(from_attributes=False)
+
+    parsed_snapshot: ParsedPortfolioSnapshot
+    position_diffs: list[PositionDiff] = []
+    parsed_total_value: Optional[Decimal] = None
+    computed_total_value: Optional[Decimal] = None
+    totals_match: bool = False
+    account_id: Optional[UUID] = None

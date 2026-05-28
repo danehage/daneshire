@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { useAccounts, usePortfolio, useCommitSnapshot, useCommitTrade, useTrades, useValueHistory } from "../hooks/usePortfolio";
 import PortfolioHeroCard from "../components/portfolio/PortfolioHeroCard";
 import ValueHistoryChart from "../components/portfolio/ValueHistoryChart";
+import UploadReviewModal from "../components/portfolio/UploadReviewModal";
 
 function AccountSelector({ accounts, selectedId, onSelect }) {
   return (
@@ -489,6 +490,7 @@ export default function PortfolioPage() {
   const [selectedAccountId, setSelectedAccountId] = useState(null);
   const { data: portfolioData, isLoading: portfolioLoading, error } = usePortfolio(selectedAccountId);
   const { data: historyData } = useValueHistory(selectedAccountId);
+  const [showUploadModal, setShowUploadModal] = useState(false);
 
   const positions = portfolioData?.positions ?? [];
   const historyPoints = historyData?.points ?? [];
@@ -497,16 +499,30 @@ export default function PortfolioPage() {
     <div>
       <div className="flex items-center justify-between mb-8">
         <h1 className="text-3xl font-serif font-bold text-ink">Portfolio</h1>
-        {!accountsLoading && (
-          <AccountSelector
-            accounts={accounts ?? []}
-            selectedId={selectedAccountId}
-            onSelect={setSelectedAccountId}
-          />
-        )}
+        <div className="flex items-center gap-3">
+          {!accountsLoading && (
+            <AccountSelector
+              accounts={accounts ?? []}
+              selectedId={selectedAccountId}
+              onSelect={setSelectedAccountId}
+            />
+          )}
+        </div>
       </div>
 
-      <CommitSnapshotForm />
+      <div className="flex gap-3 mb-4">
+        <button
+          onClick={() => setShowUploadModal(true)}
+          className="px-4 py-2 text-sm font-medium uppercase tracking-wide border-2 border-accent text-accent hover:bg-accent hover:text-warm-white transition-all"
+        >
+          ↑ Upload Snapshot
+        </button>
+        <CommitSnapshotForm />
+      </div>
+
+      {showUploadModal && (
+        <UploadReviewModal onClose={() => setShowUploadModal(false)} />
+      )}
 
       {selectedAccountId && portfolioData && (
         <PortfolioHeroCard portfolio={portfolioData} />

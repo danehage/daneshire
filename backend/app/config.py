@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     tastytrade_client_secret: str = ""
     tastytrade_refresh_token: str = ""
 
+    # Vision parsing
+    gemini_api_key: str = ""
+
     # Notifications
     pushover_user_key: str = ""
     pushover_api_token: str = ""

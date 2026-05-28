@@ -1,9 +1,9 @@
 """
-Tests for :class:`TastytradeClient` — session-token exchange, 401-driven
-re-exchange, chain parsing, and expected-move math.
+Tests for :class:`TastytradeClient` — OAuth token exchange, proactive
+refresh, 401-driven re-exchange, chain parsing, and expected-move math.
 
 Network is intercepted via ``httpx.MockTransport`` so no live calls are
-made; the remember-token is a fixed test value.
+made; the OAuth credentials are fixed test values.
 """
 
 from __future__ import annotations
@@ -23,7 +23,8 @@ from app.services.tastytrade_client import (
 )
 
 
-TEST_TOKEN = "test-remember-token"
+TEST_CLIENT_SECRET = "test-client-secret"
+TEST_REFRESH_TOKEN = "test-refresh-token"
 
 
 # ---------------------------------------------------------------------------
@@ -107,69 +108,134 @@ def _ok(body: dict, status: int = 200) -> httpx.Response:
 def _make_client(handler) -> TastytradeClient:
     transport = httpx.MockTransport(handler)
     http = httpx.AsyncClient(transport=transport, base_url=TastytradeClient.BASE_URL)
-    return TastytradeClient(remember_token=TEST_TOKEN, http_client=http)
+    return TastytradeClient(
+        client_secret=TEST_CLIENT_SECRET,
+        refresh_token=TEST_REFRESH_TOKEN,
+        http_client=http,
+    )
 
 
 class TestClientAuth:
     @pytest.mark.asyncio
-    async def test_constructor_requires_token(self):
+    async def test_constructor_requires_both_credentials(self):
         with pytest.raises(ValueError):
-            TastytradeClient(remember_token="")
+            TastytradeClient(client_secret="", refresh_token="")
+        with pytest.raises(ValueError):
+            TastytradeClient(client_secret="x", refresh_token="")
+        with pytest.raises(ValueError):
+            TastytradeClient(client_secret="", refresh_token="x")
 
     @pytest.mark.asyncio
-    async def test_session_exchange_succeeds(self):
-        calls = {"sessions": 0}
+    async def test_token_exchange_succeeds_and_caches(self):
+        calls = {"token": 0}
 
         def handler(request: httpx.Request) -> httpx.Response:
-            assert request.url.path == "/sessions"
-            calls["sessions"] += 1
+            assert request.url.path == "/oauth/token"
             assert request.method == "POST"
-            return _ok({"data": {"session-token": "session-xyz"}}, status=201)
+            body = request.read().decode()
+            assert "refresh_token" in body
+            assert TEST_REFRESH_TOKEN in body
+            assert TEST_CLIENT_SECRET in body
+            calls["token"] += 1
+            return _ok({"access_token": "access-xyz", "expires_in": 900}, status=200)
 
         client = _make_client(handler)
         try:
-            token = await client._ensure_session()
-            assert token == "session-xyz"
+            token = await client._ensure_access_token()
+            assert token == "access-xyz"
             # Second call uses cached token.
-            again = await client._ensure_session()
-            assert again == "session-xyz"
-            assert calls["sessions"] == 1
+            again = await client._ensure_access_token()
+            assert again == "access-xyz"
+            assert calls["token"] == 1
         finally:
             await client.aclose()
 
     @pytest.mark.asyncio
-    async def test_session_exchange_raises_on_4xx(self):
+    async def test_token_exchange_raises_on_4xx(self):
         def handler(request: httpx.Request) -> httpx.Response:
-            return _ok({"error": "bad token"}, status=403)
+            return _ok({"error": "invalid_grant"}, status=400)
 
         client = _make_client(handler)
         try:
             with pytest.raises(TastytradeAuthError):
-                await client._ensure_session()
+                await client._ensure_access_token()
+        finally:
+            await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_token_exchange_raises_when_access_token_missing(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            return _ok({"expires_in": 900}, status=200)
+
+        client = _make_client(handler)
+        try:
+            with pytest.raises(TastytradeAuthError):
+                await client._ensure_access_token()
+        finally:
+            await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_proactive_refresh_when_token_near_expiry(self):
+        """If the cached token has crossed its expiry, the next call re-exchanges
+        without waiting for a 401 from the data endpoint."""
+        calls = {"token": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                calls["token"] += 1
+                return _ok({"access_token": f"access-{calls['token']}", "expires_in": 900}, status=200)
+            return _ok({"data": {"items": []}})
+
+        client = _make_client(handler)
+        try:
+            await client.get_options_chain("AAPL", date(2026, 6, 5))
+            assert calls["token"] == 1
+            # Force the cached expiry into the past — next call must refresh.
+            client._access_token_expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+            await client.get_options_chain("AAPL", date(2026, 6, 5))
+            assert calls["token"] == 2
+        finally:
+            await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_uses_bearer_authorization_header(self):
+        seen_headers: dict[str, str] = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return _ok({"access_token": "access-xyz", "expires_in": 900}, status=200)
+            # Capture the auth header on the data call.
+            seen_headers["Authorization"] = request.headers.get("Authorization", "")
+            return _ok({"data": {"items": []}})
+
+        client = _make_client(handler)
+        try:
+            await client.get_options_chain("AAPL", date(2026, 6, 5))
+            assert seen_headers["Authorization"] == "Bearer access-xyz"
         finally:
             await client.aclose()
 
     @pytest.mark.asyncio
     async def test_401_on_data_call_triggers_reexchange(self):
-        calls = {"sessions": 0, "data": 0}
+        calls = {"token": 0, "data": 0}
 
         def handler(request: httpx.Request) -> httpx.Response:
-            if request.url.path == "/sessions":
-                calls["sessions"] += 1
-                token = f"session-{calls['sessions']}"
-                return _ok({"data": {"session-token": token}}, status=201)
+            if request.url.path == "/oauth/token":
+                calls["token"] += 1
+                token = f"access-{calls['token']}"
+                return _ok({"access_token": token, "expires_in": 900}, status=200)
             calls["data"] += 1
             # First data call returns 401, second succeeds.
             if calls["data"] == 1:
-                return _ok({"error": "session expired"}, status=401)
+                return _ok({"error": "access token expired"}, status=401)
             return _ok({"data": {"items": []}})
 
         client = _make_client(handler)
         try:
             chain = await client.get_options_chain("AAPL", date(2026, 6, 5))
             assert chain == []
-            # Two session exchanges (initial + after 401), two data calls.
-            assert calls["sessions"] == 2
+            # Two token exchanges (initial + after 401), two data calls.
+            assert calls["token"] == 2
             assert calls["data"] == 2
         finally:
             await client.aclose()
@@ -177,8 +243,8 @@ class TestClientAuth:
     @pytest.mark.asyncio
     async def test_second_401_surfaces_as_unavailable(self):
         def handler(request: httpx.Request) -> httpx.Response:
-            if request.url.path == "/sessions":
-                return _ok({"data": {"session-token": "stale"}}, status=201)
+            if request.url.path == "/oauth/token":
+                return _ok({"access_token": "stale", "expires_in": 900}, status=200)
             return _ok({"error": "still unauthorised"}, status=401)
 
         client = _make_client(handler)

@@ -1,11 +1,13 @@
 """
-Tastytrade API client — async, with session-token caching and 401-driven re-exchange.
+Tastytrade API client — async, with OAuth2 access-token caching and
+proactive refresh.
 
-Auth model (per #15 Agent Brief): the developer API uses a session-token
-model, not OAuth. The client holds a long-lived ``remember-token``
-provisioned via a one-time manual login (out of scope here) and exchanges
-it for a short-lived ``session-token`` on first use. On HTTP 401 from a
-data endpoint, the client transparently re-exchanges and retries once.
+Auth model: the developer API uses OAuth2. The client holds a long-lived
+``refresh_token`` (provisioned once via "Create Grant" in the tastytrade
+OAuth Applications UI) and exchanges it together with the OAuth app's
+``client_secret`` for short-lived ``access_token`` values (15-minute
+TTL). Tokens are refreshed proactively before expiry; a 401 from a data
+endpoint also triggers a re-exchange and one retry.
 
 Surface used by :class:`MarketData`:
 - :meth:`get_iv_snapshot(ticker)` — returns :class:`IVSnapshotRaw`
@@ -13,8 +15,7 @@ Surface used by :class:`MarketData`:
 
 Expected-move math (per ADR-0003) lives here so the seam only sees an
 already-computed :class:`IVSnapshotRaw`. The endpoint URL shapes mirror
-the public tastytrade developer docs and are isolated as class constants
-so they can be retargeted when a live remember-token is provisioned.
+the public tastytrade developer docs.
 """
 
 from __future__ import annotations
@@ -47,37 +48,45 @@ class TastytradeError(Exception):
 
 
 class TastytradeAuthError(TastytradeError):
-    """Session-token exchange failed (bad / revoked remember-token)."""
+    """OAuth token exchange failed (bad / revoked refresh_token or client_secret)."""
 
 
 class TastytradeUnavailable(TastytradeError):
     """No usable options data for this ticker (no chain, no quotes, stale)."""
 
 
+# Refresh the access token this many seconds before its declared expiry.
+# Guards against clock skew and in-flight requests racing the expiry.
+_REFRESH_LEEWAY_SECONDS = 60
+
+
 class TastytradeClient:
-    """Async tastytrade client with session-token caching and 401 retry."""
+    """Async tastytrade client using OAuth2 refresh-token grant."""
 
     BASE_URL = "https://api.tastytrade.com"
-    SESSIONS_PATH = "/sessions"
+    TOKEN_PATH = "/oauth/token"
     CHAIN_QUOTES_PATH = "/option-chains/{symbol}/quotes"
     QUOTE_PATH = "/market-data/{symbol}"
 
     def __init__(
         self,
-        remember_token: Optional[str] = None,
+        client_secret: Optional[str] = None,
+        refresh_token: Optional[str] = None,
         *,
         http_client: Optional[httpx.AsyncClient] = None,
     ):
-        self._remember_token = remember_token or settings.tastytrade_remember_token
-        if not self._remember_token:
+        self._client_secret = client_secret or settings.tastytrade_client_secret
+        self._refresh_token = refresh_token or settings.tastytrade_refresh_token
+        if not self._client_secret or not self._refresh_token:
             raise ValueError(
-                "TASTYTRADE_REMEMBER_TOKEN is not set. "
-                "Provision one via the manual login script and add it to .env."
+                "TASTYTRADE_CLIENT_SECRET and TASTYTRADE_REFRESH_TOKEN must both be set. "
+                "Mint a refresh_token via Manage → API → OAuth Applications → Create Grant."
             )
         # If a client is injected (tests), reuse it; otherwise own a private one.
         self._http = http_client
         self._owns_http = http_client is None
-        self._session_token: Optional[str] = None
+        self._access_token: Optional[str] = None
+        self._access_token_expires_at: Optional[datetime] = None
         self._session_lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
@@ -89,44 +98,59 @@ class TastytradeClient:
             self._http = httpx.AsyncClient(base_url=self.BASE_URL, timeout=_REQUEST_TIMEOUT)
         return self._http
 
-    async def _ensure_session(self, *, force: bool = False) -> str:
+    def _access_token_is_fresh(self) -> bool:
+        if not self._access_token or self._access_token_expires_at is None:
+            return False
+        return datetime.now(timezone.utc) < self._access_token_expires_at
+
+    async def _ensure_access_token(self, *, force: bool = False) -> str:
         async with self._session_lock:
-            if self._session_token and not force:
-                return self._session_token
+            if self._access_token_is_fresh() and not force:
+                return self._access_token  # type: ignore[return-value]
             client = await self._http_client()
             try:
                 resp = await client.post(
-                    self.SESSIONS_PATH,
-                    json={"login": "", "remember-token": self._remember_token},
+                    self.TOKEN_PATH,
+                    json={
+                        "grant_type": "refresh_token",
+                        "client_secret": self._client_secret,
+                        "refresh_token": self._refresh_token,
+                    },
                 )
             except httpx.RequestError as exc:
-                raise TastytradeAuthError(f"network error during session exchange: {exc}") from exc
-            if resp.status_code != 201 and resp.status_code != 200:
+                raise TastytradeAuthError(f"network error during token exchange: {exc}") from exc
+            if resp.status_code not in (200, 201):
                 raise TastytradeAuthError(
-                    f"session exchange returned HTTP {resp.status_code}: {resp.text[:200]}"
+                    f"token exchange returned HTTP {resp.status_code}: {resp.text[:200]}"
                 )
             payload = resp.json() or {}
-            data = payload.get("data") or payload
-            token = data.get("session-token") or data.get("sessionToken")
+            token = payload.get("access_token")
             if not token:
-                raise TastytradeAuthError("session exchange response missing session-token")
-            self._session_token = token
+                raise TastytradeAuthError("token exchange response missing access_token")
+            # expires_in is the lifetime in seconds; default to 15 min if missing.
+            expires_in = int(payload.get("expires_in") or 900)
+            self._access_token = token
+            self._access_token_expires_at = datetime.now(timezone.utc) + timedelta(
+                seconds=max(expires_in - _REFRESH_LEEWAY_SECONDS, 0)
+            )
             return token
 
     async def _authed_get(self, path: str, params: Optional[dict] = None) -> dict:
-        """GET with session-token; one transparent re-exchange on 401."""
+        """GET with bearer access-token; one transparent re-exchange on 401."""
         client = await self._http_client()
-        token = await self._ensure_session()
+        token = await self._ensure_access_token()
         for attempt in range(2):
             try:
                 resp = await client.get(
-                    path, params=params, headers={"Authorization": token}
+                    path,
+                    params=params,
+                    headers={"Authorization": f"Bearer {token}"},
                 )
             except httpx.RequestError as exc:
                 raise TastytradeUnavailable(f"network error on {path}: {exc}") from exc
             if resp.status_code == 401 and attempt == 0:
-                logger.info("tastytrade 401 on %s — re-exchanging session", path)
-                token = await self._ensure_session(force=True)
+                logger.info("tastytrade 401 on %s — refreshing access token", path)
+                token = await self._ensure_access_token(force=True)
                 continue
             if resp.status_code == 404:
                 raise TastytradeUnavailable(f"no data for {path}")

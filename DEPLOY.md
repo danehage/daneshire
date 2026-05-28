@@ -194,9 +194,11 @@ Three additional jobs drive the earnings module: the calendar refresh,
 the daily IV snapshot, and the per-event alert check. They share the
 same `X-Scheduler-Secret` header pattern as the alert-engine jobs above.
 
-Prerequisites: `FINNHUB_API_KEY` and `TASTYTRADE_REMEMBER_TOKEN` must be
-provisioned in Secret Manager and bound to the Cloud Run service before
-the snapshot job will succeed (see env-vars table below).
+Prerequisites: `FINNHUB_API_KEY`, `TASTYTRADE_CLIENT_SECRET`, and
+`TASTYTRADE_REFRESH_TOKEN` must be provisioned in Secret Manager and
+bound to the Cloud Run service before the snapshot job will succeed (see
+env-vars table below). Mint the Tastytrade refresh token via Manage →
+API → OAuth Applications → Create Grant.
 
 ### Earnings calendar refresh (daily 10 PM ET)
 
@@ -296,7 +298,8 @@ curl -X POST ${SERVICE_URL}/api/internal/health \
 | `NEON_DATABASE_URL` | Postgres connection string | Yes |
 | `FMP_API_KEY` | Financial Modeling Prep API key | Yes |
 | `FINNHUB_API_KEY` | Finnhub API key (earnings calendar) | Yes (earnings) |
-| `TASTYTRADE_REMEMBER_TOKEN` | Tastytrade session token (IV snapshots) | Yes (earnings) |
+| `TASTYTRADE_CLIENT_SECRET` | Tastytrade OAuth2 app client secret | Yes (earnings) |
+| `TASTYTRADE_REFRESH_TOKEN` | Tastytrade OAuth2 refresh token (never expires) | Yes (earnings) |
 | `PUSHOVER_USER_KEY` | Pushover user key for notifications | Yes |
 | `PUSHOVER_API_TOKEN` | Pushover app token | Yes |
 | `SCHEDULER_SECRET` | Secret for internal endpoints | Yes |

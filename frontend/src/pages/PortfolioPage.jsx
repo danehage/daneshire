@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { useAccounts, usePortfolio, useCommitSnapshot } from "../hooks/usePortfolio";
+import { useAccounts, usePortfolio, useCommitSnapshot, useCommitTrade, useTrades } from "../hooks/usePortfolio";
 import PortfolioHeroCard from "../components/portfolio/PortfolioHeroCard";
 
 function AccountSelector({ accounts, selectedId, onSelect }) {
@@ -251,6 +251,238 @@ function CommitSnapshotForm({ onSuccess }) {
   );
 }
 
+function CommitTradeForm({ accountId, onSuccess }) {
+  const commitMutation = useCommitTrade();
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState({
+    ticker: "",
+    instrument_type: "equity",
+    side: "buy",
+    qty: "",
+    price: "",
+    executed_at: new Date().toISOString().slice(0, 16),
+  });
+  const [error, setError] = useState(null);
+  const [lastWarnings, setLastWarnings] = useState([]);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError(null);
+    setLastWarnings([]);
+    try {
+      const result = await commitMutation.mutateAsync({
+        account_id: accountId,
+        ticker: form.ticker,
+        instrument_type: form.instrument_type,
+        side: form.side,
+        qty: form.qty,
+        price: form.price,
+        executed_at: new Date(form.executed_at).toISOString(),
+      });
+      if (result.warnings?.length > 0) {
+        setLastWarnings(result.warnings);
+      } else {
+        setOpen(false);
+      }
+      onSuccess?.();
+    } catch (err) {
+      setError(err.message);
+    }
+  };
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="px-4 py-2 text-sm font-medium uppercase tracking-wide border-2 border-ink hover:bg-cream transition-all"
+      >
+        + Log Trade
+      </button>
+    );
+  }
+
+  return (
+    <div className="bg-warm-white border-2 border-ink p-4 mb-4">
+      <h2 className="font-serif font-bold text-lg mb-4">Log Trade</h2>
+      <form onSubmit={handleSubmit} className="space-y-3">
+        <div className="grid grid-cols-3 gap-3">
+          <div>
+            <label className="block text-xs font-bold uppercase tracking-wide mb-1">Ticker *</label>
+            <input
+              required
+              value={form.ticker}
+              onChange={(e) => setForm({ ...form, ticker: e.target.value.toUpperCase() })}
+              className="w-full px-2 py-1 border-2 border-ink font-mono text-sm bg-cream"
+              placeholder="AAPL"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-bold uppercase tracking-wide mb-1">Side *</label>
+            <select
+              value={form.side}
+              onChange={(e) => setForm({ ...form, side: e.target.value })}
+              className="w-full px-2 py-1 border-2 border-ink font-mono text-sm bg-cream"
+            >
+              <option value="buy">Buy</option>
+              <option value="sell">Sell</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-bold uppercase tracking-wide mb-1">Type *</label>
+            <select
+              value={form.instrument_type}
+              onChange={(e) => setForm({ ...form, instrument_type: e.target.value })}
+              className="w-full px-2 py-1 border-2 border-ink font-mono text-sm bg-cream"
+            >
+              <option value="equity">Equity</option>
+              <option value="option">Option</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-xs font-bold uppercase tracking-wide mb-1">Qty *</label>
+            <input
+              required
+              type="number"
+              step="0.000001"
+              min="0.000001"
+              value={form.qty}
+              onChange={(e) => setForm({ ...form, qty: e.target.value })}
+              className="w-full px-2 py-1 border-2 border-ink font-mono text-sm bg-cream"
+              placeholder="10"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-bold uppercase tracking-wide mb-1">Price *</label>
+            <input
+              required
+              type="number"
+              step="0.0001"
+              min="0"
+              value={form.price}
+              onChange={(e) => setForm({ ...form, price: e.target.value })}
+              className="w-full px-2 py-1 border-2 border-ink font-mono text-sm bg-cream"
+              placeholder="190.00"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-bold uppercase tracking-wide mb-1">Executed At *</label>
+            <input
+              required
+              type="datetime-local"
+              value={form.executed_at}
+              onChange={(e) => setForm({ ...form, executed_at: e.target.value })}
+              className="w-full px-2 py-1 border-2 border-ink font-mono text-sm bg-cream"
+            />
+          </div>
+        </div>
+        {lastWarnings.length > 0 && (
+          <div className="p-2 border border-amber-400 bg-amber-50 text-amber-800 text-xs font-mono">
+            {lastWarnings.map((w, i) => <div key={i}>⚠ {w}</div>)}
+          </div>
+        )}
+        {error && <p className="text-red-600 text-sm font-mono">{error}</p>}
+        <div className="flex gap-2">
+          <button
+            type="submit"
+            disabled={commitMutation.isPending}
+            className="px-4 py-2 text-sm font-medium uppercase tracking-wide border-2 border-ink bg-ink text-warm-white hover:bg-dark-brown disabled:opacity-50"
+          >
+            {commitMutation.isPending ? "Saving…" : "Save Trade"}
+          </button>
+          <button
+            type="button"
+            onClick={() => { setOpen(false); setLastWarnings([]); }}
+            className="px-4 py-2 text-sm font-medium uppercase tracking-wide border-2 border-ink hover:bg-cream"
+          >
+            Cancel
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function TradeLog({ accountId }) {
+  const { data: trades, isLoading } = useTrades(accountId ? { accountId } : undefined);
+
+  if (!accountId) return null;
+
+  return (
+    <div className="bg-warm-white border-2 border-ink shadow-hard mt-6">
+      <div className="px-4 py-3 border-b-2 border-ink">
+        <h2 className="font-serif font-bold text-lg">Trade Log</h2>
+      </div>
+      {isLoading ? (
+        <div className="p-8 text-center text-mid-brown font-mono text-sm">Loading…</div>
+      ) : !trades || trades.length === 0 ? (
+        <div className="p-8 text-center text-mid-brown font-mono text-sm">No trades logged yet.</div>
+      ) : (
+        <>
+          <table className="w-full text-sm font-mono">
+            <thead>
+              <tr className="border-b-2 border-ink">
+                <th className="text-left py-2 px-3 font-bold uppercase text-xs tracking-wide">Date</th>
+                <th className="text-left py-2 px-3 font-bold uppercase text-xs tracking-wide">Ticker</th>
+                <th className="text-left py-2 px-3 font-bold uppercase text-xs tracking-wide">Side</th>
+                <th className="text-right py-2 px-3 font-bold uppercase text-xs tracking-wide">Qty</th>
+                <th className="text-right py-2 px-3 font-bold uppercase text-xs tracking-wide">Price</th>
+                <th className="text-right py-2 px-3 font-bold uppercase text-xs tracking-wide">Realized P/L</th>
+              </tr>
+            </thead>
+            <tbody>
+              {trades.map((t) => {
+                const pl = t.realized_pl != null ? Number(t.realized_pl) : null;
+                const isPos = pl != null && pl > 0;
+                const isNeg = pl != null && pl < 0;
+                return (
+                  <tr key={t.id} className="border-b border-ink/20 hover:bg-cream/50">
+                    <td className="py-2 px-3 text-mid-brown">
+                      {new Date(t.executed_at).toLocaleDateString()}
+                    </td>
+                    <td className="py-2 px-3">
+                      <Link
+                        to={`/ticker/${t.ticker}`}
+                        className="font-bold text-ink hover:text-accent transition-colors"
+                      >
+                        {t.ticker}
+                      </Link>
+                    </td>
+                    <td className="py-2 px-3">
+                      <span
+                        className={`px-1 py-0.5 text-xs font-mono uppercase border ${
+                          t.side === "buy"
+                            ? "border-green-600 text-green-700"
+                            : "border-red-500 text-red-600"
+                        }`}
+                      >
+                        {t.side}
+                      </span>
+                    </td>
+                    <td className="py-2 px-3 text-right">{Number(t.qty).toLocaleString()}</td>
+                    <td className="py-2 px-3 text-right">${Number(t.price).toFixed(2)}</td>
+                    <td
+                      className={`py-2 px-3 text-right ${
+                        isPos ? "text-green-700" : isNeg ? "text-red-700" : "text-mid-brown"
+                      }`}
+                    >
+                      {pl != null
+                        ? `${pl >= 0 ? "+" : ""}$${Math.abs(pl).toFixed(2)}`
+                        : "—"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <p className="px-4 py-2 text-xs text-mid-brown font-mono border-t border-ink/20">
+            Realized P/L uses average cost and may differ from your broker's 1099-B.
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function PortfolioPage() {
   const { data: accounts, isLoading: accountsLoading } = useAccounts();
   const [selectedAccountId, setSelectedAccountId] = useState(null);
@@ -278,13 +510,16 @@ export default function PortfolioPage() {
       )}
 
       <div className="bg-warm-white border-2 border-ink shadow-hard">
-        <div className="px-4 py-3 border-b-2 border-ink">
+        <div className="px-4 py-3 border-b-2 border-ink flex items-center justify-between">
           <h2 className="font-serif font-bold text-lg">
             Current Holdings
             <span className="ml-2 text-sm font-mono font-normal text-mid-brown">
-              (latest snapshot)
+              (snapshot + trades)
             </span>
           </h2>
+          {selectedAccountId && (
+            <CommitTradeForm accountId={selectedAccountId} />
+          )}
         </div>
         {portfolioLoading ? (
           <div className="p-8 text-center text-mid-brown font-mono text-sm">Loading…</div>
@@ -294,6 +529,8 @@ export default function PortfolioPage() {
           <HoldingsTable positions={positions} />
         )}
       </div>
+
+      <TradeLog accountId={selectedAccountId} />
     </div>
   );
 }

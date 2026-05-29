@@ -3,9 +3,10 @@ PortfolioEngine — orchestrator that turns persisted snapshots into a live
 portfolio view, mirroring the AlertEngine pattern (pure orchestrator over
 a typed seam; no I/O outside MarketData + db).
 
-This slice (issue #8) is baseline-only: ``current_holdings`` returns the
-latest snapshot's holdings without a trades layer. ``portfolio_value``
-adds live FMP marks via ``MarketData.quotes``.
+Issue #8: baseline current_holdings (latest snapshot, no trades) +
+          portfolio_value with live FMP marks.
+Issue #9: layered current_holdings (snapshot + trades since captured_at) +
+          apply_trade (persist + realized P/L computation).
 """
 
 from __future__ import annotations
@@ -19,7 +20,8 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.portfolio import Holding, PortfolioSnapshot
+from app.models.portfolio import Holding, PortfolioSnapshot, Trade
+from app.schemas.portfolio import TradeCommit
 from app.services.market import MarketData, MarketDataError
 
 
@@ -53,6 +55,31 @@ class PortfolioValue:
     day_change: Decimal = Decimal(0)
 
 
+@dataclass
+class TradeResult:
+    trade_row: Trade
+    warnings: list[str]
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _position_key(
+    ticker: str,
+    instrument_type: str,
+    option_type: Optional[str] = None,
+    strike: Optional[Decimal] = None,
+    expiry: Optional[date] = None,
+) -> tuple:
+    """Stable dict key for a position. Options key by all leg fields to avoid
+    collisions between different strikes/expiries on the same underlying."""
+    if instrument_type == "equity":
+        return (ticker.upper(), "equity")
+    return (ticker.upper(), "option", option_type, strike, expiry)
+
+
 # ---------------------------------------------------------------------------
 # Engine
 # ---------------------------------------------------------------------------
@@ -71,9 +98,11 @@ class PortfolioEngine:
         self.market = market
 
     async def current_holdings(self, account_id: UUID) -> list[ComputedHolding]:
-        """Baseline only: latest snapshot's holdings, no trades layer.
+        """Layered: latest snapshot holdings + trades committed after the snapshot.
 
         Returns an empty list when no snapshot exists for the account.
+        Trades with ``executed_at <= snapshot.captured_at`` are ignored —
+        the snapshot is authoritative for that date range.
         """
         snap_result = await self.db.execute(
             select(PortfolioSnapshot)
@@ -90,20 +119,144 @@ class PortfolioEngine:
         )
         holdings = list(holdings_result.scalars().all())
 
+        # Build position dict from snapshot
+        positions: dict[tuple, dict] = {}
+        for h in holdings:
+            key = _position_key(h.ticker, h.instrument_type, h.option_type, h.strike, h.expiry)
+            positions[key] = {
+                "ticker": h.ticker,
+                "qty": h.qty,
+                "avg_cost": h.avg_cost,
+                "instrument_type": h.instrument_type,
+                "option_type": h.option_type,
+                "strike": h.strike,
+                "expiry": h.expiry,
+                "multiplier": h.multiplier,
+                "underlying_ticker": h.underlying_ticker,
+            }
+
+        # Load trades committed after the snapshot, in chronological order
+        trades_result = await self.db.execute(
+            select(Trade)
+            .where(
+                Trade.account_id == account_id,
+                Trade.executed_at > snapshot.captured_at,
+            )
+            .order_by(Trade.executed_at.asc())
+        )
+        trades = list(trades_result.scalars().all())
+
+        # Apply each trade in order
+        for trade in trades:
+            key = _position_key(
+                trade.ticker, trade.instrument_type,
+                trade.option_type, trade.strike, trade.expiry,
+            )
+            if trade.side == "buy":
+                if key in positions:
+                    old_qty = positions[key]["qty"]
+                    old_avg = positions[key]["avg_cost"]
+                    new_qty = old_qty + trade.qty
+                    new_avg = (old_qty * old_avg + trade.qty * trade.price) / new_qty
+                    positions[key]["qty"] = new_qty
+                    positions[key]["avg_cost"] = new_avg
+                else:
+                    positions[key] = {
+                        "ticker": trade.ticker,
+                        "qty": trade.qty,
+                        "avg_cost": trade.price,
+                        "instrument_type": trade.instrument_type,
+                        "option_type": trade.option_type,
+                        "strike": trade.strike,
+                        "expiry": trade.expiry,
+                        "multiplier": trade.multiplier,
+                        "underlying_ticker": trade.underlying_ticker,
+                    }
+            elif trade.side == "sell":
+                if key in positions:
+                    old_qty = positions[key]["qty"]
+                    new_qty = old_qty - trade.qty
+                    if new_qty <= Decimal(0):
+                        del positions[key]
+                    else:
+                        positions[key]["qty"] = new_qty
+
         return [
             ComputedHolding(
-                ticker=h.ticker,
-                qty=h.qty,
-                avg_cost=h.avg_cost,
-                instrument_type=h.instrument_type,
-                option_type=h.option_type,
-                strike=h.strike,
-                expiry=h.expiry,
-                multiplier=h.multiplier,
-                underlying_ticker=h.underlying_ticker,
+                ticker=p["ticker"],
+                qty=p["qty"],
+                avg_cost=p["avg_cost"],
+                instrument_type=p["instrument_type"],
+                option_type=p["option_type"],
+                strike=p["strike"],
+                expiry=p["expiry"],
+                multiplier=p["multiplier"],
+                underlying_ticker=p["underlying_ticker"],
             )
-            for h in holdings
+            for p in positions.values()
         ]
+
+    async def apply_trade(self, parsed: TradeCommit) -> TradeResult:
+        """Persist a trade and compute realized P/L for sell-side trades.
+
+        Realized P/L = (sell_price - avg_cost) * effective_sell_qty.
+        Oversell (sell qty > held qty) caps at held qty and adds a warning;
+        does not crash.
+        """
+        realized_pl: Optional[Decimal] = None
+        warnings: list[str] = []
+
+        if parsed.side == "sell":
+            current = await self.current_holdings(parsed.account_id)
+            target_key = _position_key(
+                parsed.ticker, parsed.instrument_type,
+                parsed.option_type, parsed.strike, parsed.expiry,
+            )
+            existing: Optional[ComputedHolding] = None
+            for h in current:
+                if _position_key(h.ticker, h.instrument_type, h.option_type, h.strike, h.expiry) == target_key:
+                    existing = h
+                    break
+
+            if existing is not None:
+                held_qty = existing.qty
+                if parsed.qty > held_qty:
+                    warnings.append(
+                        f"oversell: attempted {parsed.qty} but only {held_qty} held; "
+                        f"realized P/L computed on {held_qty}"
+                    )
+                    effective_qty = held_qty
+                else:
+                    effective_qty = parsed.qty
+                realized_pl = (parsed.price - existing.avg_cost) * effective_qty
+            else:
+                warnings.append(
+                    f"oversell: no existing {parsed.ticker} position found; no realized P/L computed"
+                )
+
+        trade = Trade(
+            account_id=parsed.account_id,
+            watchlist_item_id=parsed.watchlist_item_id,
+            ticker=parsed.ticker.upper(),
+            instrument_type=parsed.instrument_type,
+            side=parsed.side,
+            qty=parsed.qty,
+            price=parsed.price,
+            executed_at=parsed.executed_at,
+            option_type=parsed.option_type,
+            strike=parsed.strike,
+            expiry=parsed.expiry,
+            multiplier=parsed.multiplier,
+            underlying_ticker=(
+                parsed.underlying_ticker.upper() if parsed.underlying_ticker else None
+            ),
+            realized_pl=realized_pl,
+        )
+        self.db.add(trade)
+        await self.db.commit()
+        await self.db.refresh(trade)
+
+        return TradeResult(trade_row=trade, warnings=warnings)
 
     async def portfolio_value(self, account_id: UUID) -> PortfolioValue:
         """current_holdings + live FMP marks + cash + totals.
@@ -113,8 +266,7 @@ class PortfolioEngine:
         as ``market_value=None`` on the position; they are excluded from
         the total but the position row is still included.
 
-        Options are not live-marked in this slice — they always have
-        ``market_value=None``.
+        Options are not live-marked — they always have ``market_value=None``.
         """
         snap_result = await self.db.execute(
             select(PortfolioSnapshot)

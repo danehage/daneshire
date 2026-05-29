@@ -3,13 +3,13 @@ from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
-from app.models.portfolio import Account, Holding, PortfolioSnapshot
+from app.models.portfolio import Account, Holding, PortfolioSnapshot, Trade
 from app.routes.dependencies import get_portfolio_engine
 from app.schemas.portfolio import (
     AccountResponse,
@@ -17,6 +17,8 @@ from app.schemas.portfolio import (
     PortfolioSnapshotCommit,
     PortfolioSnapshotResponse,
     PortfolioValueResponse,
+    TradeCommit,
+    TradeResponse,
 )
 from app.services.portfolio_engine import PortfolioEngine
 
@@ -132,3 +134,56 @@ async def commit_snapshot(
         .where(PortfolioSnapshot.id == snapshot.id)
     )
     return snap_result.scalar_one()
+
+
+def _trade_response(trade: Trade, warnings: list[str] | None = None) -> TradeResponse:
+    return TradeResponse(
+        id=trade.id,
+        account_id=trade.account_id,
+        watchlist_item_id=trade.watchlist_item_id,
+        ticker=trade.ticker,
+        instrument_type=trade.instrument_type,
+        side=trade.side,
+        qty=trade.qty,
+        price=trade.price,
+        executed_at=trade.executed_at,
+        created_at=trade.created_at,
+        option_type=trade.option_type,
+        strike=trade.strike,
+        expiry=trade.expiry,
+        multiplier=trade.multiplier,
+        underlying_ticker=trade.underlying_ticker,
+        realized_pl=trade.realized_pl,
+        warnings=warnings or [],
+    )
+
+
+@router.post("/trades/commit", response_model=TradeResponse, status_code=201)
+async def commit_trade(
+    body: TradeCommit,
+    engine: PortfolioEngine = Depends(get_portfolio_engine),
+):
+    """Persist a trade and return realized P/L for sells. Oversells are surfaced
+    via ``warnings`` without blocking the commit."""
+    result = await engine.apply_trade(body)
+    return _trade_response(result.trade_row, result.warnings)
+
+
+@router.get("/trades", response_model=list[TradeResponse])
+async def list_trades(
+    account_id: Optional[UUID] = Query(default=None),
+    ticker: Optional[str] = Query(default=None),
+    since: Optional[datetime] = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return trades, newest first. Filter by account_id, ticker, and/or since."""
+    stmt = select(Trade).order_by(Trade.executed_at.desc())
+    if account_id is not None:
+        stmt = stmt.where(Trade.account_id == account_id)
+    if ticker is not None:
+        stmt = stmt.where(Trade.ticker == ticker.upper())
+    if since is not None:
+        stmt = stmt.where(Trade.executed_at >= since)
+    result = await db.execute(stmt)
+    trades = result.scalars().all()
+    return [_trade_response(t) for t in trades]

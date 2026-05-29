@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { useAccounts, usePortfolio, useCommitSnapshot, useCommitTrade, useTrades } from "../hooks/usePortfolio";
+import { useAccounts, usePortfolio, useCommitSnapshot, useCommitTrade, useTrades, useValueHistory } from "../hooks/usePortfolio";
 import PortfolioHeroCard from "../components/portfolio/PortfolioHeroCard";
+import ValueHistoryChart from "../components/portfolio/ValueHistoryChart";
 
 function AccountSelector({ accounts, selectedId, onSelect }) {
   return (
@@ -487,8 +488,10 @@ export default function PortfolioPage() {
   const { data: accounts, isLoading: accountsLoading } = useAccounts();
   const [selectedAccountId, setSelectedAccountId] = useState(null);
   const { data: portfolioData, isLoading: portfolioLoading, error } = usePortfolio(selectedAccountId);
+  const { data: historyData } = useValueHistory(selectedAccountId);
 
   const positions = portfolioData?.positions ?? [];
+  const historyPoints = historyData?.points ?? [];
 
   return (
     <div>
@@ -507,6 +510,22 @@ export default function PortfolioPage() {
 
       {selectedAccountId && portfolioData && (
         <PortfolioHeroCard portfolio={portfolioData} />
+      )}
+
+      {selectedAccountId && historyPoints.length > 0 && (
+        <div className="bg-warm-white border-2 border-ink shadow-hard mb-6">
+          <div className="px-4 py-3 border-b-2 border-ink">
+            <h2 className="font-serif font-bold text-lg">
+              Value History
+              <span className="ml-2 text-sm font-mono font-normal text-mid-brown">
+                (snapshots + live)
+              </span>
+            </h2>
+          </div>
+          <div className="p-2">
+            <ValueHistoryChart points={historyPoints} />
+          </div>
+        </div>
       )}
 
       <div className="bg-warm-white border-2 border-ink shadow-hard">

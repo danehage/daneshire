@@ -455,3 +455,81 @@ async def test_get_portfolio_reflects_post_trade_holdings(client: AsyncClient):
     assert "NVDA" in tickers  # From trade
     assert "AAPL" in tickers  # From snapshot
     assert "MSFT" in tickers  # From snapshot
+
+
+# ---------------------------------------------------------------------------
+# GET /api/portfolio/value-history
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_value_history_no_account_id_returns_empty(client: AsyncClient):
+    """GET /value-history with no account_id returns empty points list."""
+    response = await client.get("/api/portfolio/value-history")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["account_id"] is None
+    assert data["points"] == []
+
+
+@pytest.mark.asyncio
+async def test_get_value_history_empty_account(client: AsyncClient):
+    """GET /value-history for an account with no snapshots returns empty points."""
+    fake_id = "00000000-0000-0000-0000-000000000001"
+    response = await client.get(f"/api/portfolio/value-history?account_id={fake_id}")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["account_id"] == fake_id
+    assert data["points"] == []
+
+
+@pytest.mark.asyncio
+async def test_get_value_history_returns_snapshot_plus_current(client: AsyncClient):
+    """GET /value-history returns one snapshot point + one current point."""
+    await client.post("/api/portfolio/snapshots/commit", json=SNAPSHOT_PAYLOAD)
+    accounts = (await client.get("/api/portfolio/accounts")).json()
+    account_id = accounts[0]["id"]
+
+    response = await client.get(f"/api/portfolio/value-history?account_id={account_id}")
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["account_id"] == account_id
+    assert len(data["points"]) == 2
+    snapshot_point = data["points"][0]
+    current_point = data["points"][1]
+
+    assert snapshot_point["source"] == "snapshot"
+    assert "timestamp" in snapshot_point
+    assert "total_value" in snapshot_point
+
+    assert current_point["source"] == "current"
+    assert "timestamp" in current_point
+    assert "total_value" in current_point
+
+
+@pytest.mark.asyncio
+async def test_get_value_history_multiple_snapshots_ordered(client: AsyncClient):
+    """Multiple snapshots appear chronologically oldest-first before the current point."""
+    for captured_at in ["2026-05-20T12:00:00Z", "2026-05-21T12:00:00Z"]:
+        payload = dict(SNAPSHOT_PAYLOAD, captured_at=captured_at)
+        await client.post("/api/portfolio/snapshots/commit", json=payload)
+
+    accounts = (await client.get("/api/portfolio/accounts")).json()
+    account_id = accounts[0]["id"]
+
+    response = await client.get(f"/api/portfolio/value-history?account_id={account_id}")
+    assert response.status_code == 200
+    data = response.json()
+
+    points = data["points"]
+    assert len(points) == 3  # 2 snapshots + 1 current
+    assert points[0]["source"] == "snapshot"
+    assert points[1]["source"] == "snapshot"
+    assert points[2]["source"] == "current"
+    # Timestamps are ascending
+    from datetime import datetime
+    t0 = datetime.fromisoformat(points[0]["timestamp"].replace("Z", "+00:00"))
+    t1 = datetime.fromisoformat(points[1]["timestamp"].replace("Z", "+00:00"))
+    t2 = datetime.fromisoformat(points[2]["timestamp"].replace("Z", "+00:00"))
+    assert t0 < t1 < t2

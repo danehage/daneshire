@@ -43,3 +43,10 @@ export async function getTrades({ accountId, ticker, since } = {}) {
   if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`);
   return res.json();
 }
+
+export async function getValueHistory(accountId) {
+  const params = accountId ? `?account_id=${accountId}` : "";
+  const res = await fetch(`${API_BASE}/api/portfolio/value-history${params}`);
+  if (!res.ok) throw new Error(`${res.status}: ${res.statusText}`);
+  return res.json();
+}

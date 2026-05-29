@@ -24,7 +24,12 @@ from app.models.portfolio import Account, Holding, PortfolioSnapshot, Trade
 from app.schemas.market import PriceQuote
 from app.schemas.portfolio import TradeCommit
 from app.services.market import MarketDataError, TickerNotFound
-from app.services.portfolio_engine import ComputedHolding, PortfolioEngine, PortfolioValue
+from app.services.portfolio_engine import (
+    ComputedHolding,
+    PortfolioEngine,
+    PortfolioValue,
+    ValueHistory,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -63,11 +68,13 @@ async def _insert_snapshot(
     account_id: UUID,
     cash_balance: Optional[Decimal] = None,
     captured_at: Optional[datetime] = None,
+    total_value: Optional[Decimal] = None,
 ) -> PortfolioSnapshot:
     snap = PortfolioSnapshot(
         account_id=account_id,
         captured_at=captured_at or datetime(2026, 5, 21, 12, 0, 0, tzinfo=timezone.utc),
         cash_balance=cash_balance,
+        total_value=total_value,
     )
     db.add(snap)
     await db.flush()
@@ -530,3 +537,82 @@ async def test_trade_before_snapshot_is_ignored(db_session: AsyncSession):
 
     aapl = next(h for h in holdings if h.ticker == "AAPL")
     assert aapl.qty == Decimal("10")  # Trade ignored — snapshot is authoritative
+
+
+# ---------------------------------------------------------------------------
+# value_history tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_value_history_empty_account(db_session: AsyncSession):
+    """No snapshots → empty points list, no current point."""
+    acct = await _insert_account(db_session)
+    await db_session.commit()
+
+    engine = PortfolioEngine(db=db_session, market=FakeMarket())
+    vh = await engine.value_history(acct.id)
+
+    assert isinstance(vh, ValueHistory)
+    assert vh.points == []
+
+
+@pytest.mark.asyncio
+async def test_value_history_one_snapshot_plus_current(db_session: AsyncSession):
+    """One snapshot → snapshot point + live current point at end."""
+    acct = await _insert_account(db_session)
+    snap = await _insert_snapshot(
+        db_session,
+        acct.id,
+        cash_balance=Decimal("1000"),
+        captured_at=datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc),
+        total_value=Decimal("5000"),
+    )
+    await _insert_holding(db_session, snap.id, "AAPL", "10", "180.00")
+    await db_session.commit()
+
+    fake_market = FakeMarket(
+        quotes_by_ticker={
+            "AAPL": PriceQuote(ticker="AAPL", price=200.0, change=5.0, change_pct=2.5)
+        }
+    )
+    engine = PortfolioEngine(db=db_session, market=fake_market)
+    vh = await engine.value_history(acct.id)
+
+    assert len(vh.points) == 2
+    assert vh.points[0].source == "snapshot"
+    assert vh.points[0].total_value == Decimal("5000")
+    assert vh.points[-1].source == "current"
+    # current total = 10 * 200 + 1000 cash = 3000
+    assert vh.points[-1].total_value == Decimal("3000.0")
+
+
+@pytest.mark.asyncio
+async def test_value_history_multiple_snapshots_ordered(db_session: AsyncSession):
+    """Multiple snapshots are returned oldest-first; current point is last."""
+    acct = await _insert_account(db_session)
+    await _insert_snapshot(
+        db_session,
+        acct.id,
+        captured_at=datetime(2026, 4, 1, 12, 0, tzinfo=timezone.utc),
+        total_value=Decimal("10000"),
+    )
+    await _insert_snapshot(
+        db_session,
+        acct.id,
+        captured_at=datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc),
+        total_value=Decimal("12000"),
+    )
+    await db_session.commit()
+
+    engine = PortfolioEngine(db=db_session, market=FakeMarket())
+    vh = await engine.value_history(acct.id)
+
+    assert len(vh.points) == 3
+    assert vh.points[0].source == "snapshot"
+    assert vh.points[0].total_value == Decimal("10000")
+    assert vh.points[1].source == "snapshot"
+    assert vh.points[1].total_value == Decimal("12000")
+    assert vh.points[2].source == "current"
+    # timestamps are ascending
+    assert vh.points[0].timestamp < vh.points[1].timestamp < vh.points[2].timestamp

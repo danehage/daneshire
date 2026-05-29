@@ -19,6 +19,8 @@ from app.schemas.portfolio import (
     PortfolioValueResponse,
     TradeCommit,
     TradeResponse,
+    ValueHistoryPoint,
+    ValueHistoryResponse,
 )
 from app.services.portfolio_engine import PortfolioEngine
 
@@ -74,6 +76,33 @@ async def get_portfolio(
                 underlying_ticker=h.underlying_ticker,
             )
             for h in pv.positions
+        ],
+    )
+
+
+@router.get("/value-history", response_model=ValueHistoryResponse)
+async def get_value_history(
+    account_id: Optional[UUID] = Query(default=None),
+    engine: PortfolioEngine = Depends(get_portfolio_engine),
+):
+    """Return sparse portfolio value history: snapshot points + live current point.
+
+    When ``account_id`` is omitted the response has an empty points list.
+    """
+    if account_id is None:
+        return ValueHistoryResponse(account_id=None, points=[])
+
+    vh = await engine.value_history(account_id)
+    return ValueHistoryResponse(
+        account_id=vh.account_id,
+        points=[
+            ValueHistoryPoint(
+                timestamp=p.timestamp,
+                total_value=p.total_value,
+                cash_balance=p.cash_balance,
+                source=p.source,
+            )
+            for p in vh.points
         ],
     )
 

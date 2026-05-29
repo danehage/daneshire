@@ -184,6 +184,8 @@ class TestClientAuth:
             if request.url.path == "/oauth/token":
                 calls["token"] += 1
                 return _ok({"access_token": f"access-{calls['token']}", "expires_in": 900}, status=200)
+            # Empty chain — nested endpoint returns no items, so
+            # get_options_chain short-circuits after a single data call.
             return _ok({"data": {"items": []}})
 
         client = _make_client(handler)
@@ -251,5 +253,253 @@ class TestClientAuth:
         try:
             with pytest.raises(TastytradeUnavailable):
                 await client.get_options_chain("AAPL", date(2026, 6, 5))
+        finally:
+            await client.aclose()
+
+
+# ---------------------------------------------------------------------------
+# REST endpoint integration — nested chain + market-data + market-metrics
+# ---------------------------------------------------------------------------
+
+
+def _token_response() -> httpx.Response:
+    return _ok({"access_token": "tok", "expires_in": 900}, status=200)
+
+
+def _nested_chain_response(expiry_to_strikes: dict[str, list[dict]]) -> httpx.Response:
+    """Build a /option-chains/{symbol}/nested response.
+
+    ``expiry_to_strikes`` maps ISO date → list of strike rows
+    ``{"strike-price", "call", "put"}``.
+    """
+    expirations = [
+        {
+            "expiration-date": exp,
+            "expiration-type": "Weekly",
+            "days-to-expiration": 7,
+            "settlement-type": "PM",
+            "strikes": strikes,
+        }
+        for exp, strikes in expiry_to_strikes.items()
+    ]
+    return _ok({"data": {"items": [{"expirations": expirations}]}})
+
+
+def _market_data_response(items: list[dict]) -> httpx.Response:
+    return _ok({"data": {"items": items}})
+
+
+def _market_metrics_response(items: list[dict]) -> httpx.Response:
+    return _ok({"data": {"items": items}})
+
+
+class TestGetOptionsChain:
+    @pytest.mark.asyncio
+    async def test_returns_empty_when_expiry_not_published(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return _token_response()
+            # Nested chain has 2026-06-05 but caller asks for 2026-06-12.
+            return _nested_chain_response(
+                {"2026-06-05": [{"strike-price": "100.0", "call": "C1", "put": "P1"}]}
+            )
+
+        client = _make_client(handler)
+        try:
+            rows = await client.get_options_chain("AAPL", date(2026, 6, 12))
+            assert rows == []
+        finally:
+            await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_two_step_fetch_and_merge(self):
+        """Verifies the nested→market-data flow: nested gives OCC symbols,
+        market-data gives quotes, the merged rows carry strike/side/bid/
+        ask/last in the shape downstream helpers consume."""
+        calls = {"nested": 0, "market_data": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return _token_response()
+            if request.url.path == "/option-chains/AAPL/nested":
+                calls["nested"] += 1
+                return _nested_chain_response(
+                    {
+                        "2026-06-05": [
+                            {"strike-price": "100.0", "call": "AAPL-C100", "put": "AAPL-P100"},
+                            {"strike-price": "105.0", "call": "AAPL-C105", "put": "AAPL-P105"},
+                        ]
+                    }
+                )
+            if request.url.path == "/market-data/by-type":
+                calls["market_data"] += 1
+                # Verify the batch-list param is built correctly.
+                got = request.url.params.get("equity-option") or ""
+                assert "AAPL-C100" in got and "AAPL-P105" in got
+                return _market_data_response(
+                    [
+                        {"symbol": "AAPL-C100", "bid": "5.10", "ask": "5.30", "last": "5.20", "updated-at": "2026-06-03T15:00:00+00:00"},
+                        {"symbol": "AAPL-P100", "bid": "4.10", "ask": "4.30", "last": "4.20", "updated-at": "2026-06-03T15:00:00+00:00"},
+                        {"symbol": "AAPL-C105", "bid": "2.10", "ask": "2.30", "last": "2.20", "updated-at": "2026-06-03T15:00:00+00:00"},
+                        {"symbol": "AAPL-P105", "bid": "7.10", "ask": "7.30", "last": "7.20", "updated-at": "2026-06-03T15:00:00+00:00"},
+                    ]
+                )
+            return httpx.Response(404)
+
+        client = _make_client(handler)
+        try:
+            rows = await client.get_options_chain("AAPL", date(2026, 6, 5))
+            assert calls == {"nested": 1, "market_data": 1}
+            assert len(rows) == 4
+            # All rows expose the keys downstream helpers consume.
+            for r in rows:
+                assert set(r.keys()) == {"strike-price", "option-type", "bid", "ask", "last", "updated-at"}
+            # ATM picker should now work on these rows.
+            atm = _pick_atm_strike(rows, underlying_price=101.0)
+            assert atm is not None and atm.strike == 100.0
+        finally:
+            await client.aclose()
+
+
+class TestFetchUnderlyingAndExpiry:
+    @pytest.mark.asyncio
+    async def test_underlying_quote_combines_market_data_and_metrics(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return _token_response()
+            if request.url.path == "/market-data/by-type":
+                assert request.url.params.get("equity") == "AAPL"
+                return _market_data_response(
+                    [{"symbol": "AAPL", "last": "311.67", "mid": "311.72", "bid": "311.66", "ask": "311.78"}]
+                )
+            if request.url.path == "/market-metrics":
+                assert request.url.params.get("symbols") == "AAPL"
+                return _market_metrics_response(
+                    [
+                        {
+                            "symbol": "AAPL",
+                            "implied-volatility-index": "0.237738",
+                            "implied-volatility-index-rank": "0.290098437",
+                        }
+                    ]
+                )
+            return httpx.Response(404)
+
+        client = _make_client(handler)
+        try:
+            uq = await client._fetch_underlying_quote("AAPL")
+            assert uq.price == pytest.approx(311.67)
+            assert uq.iv30 == pytest.approx(0.237738)
+            # Provider value scaled from 0..1 to 0..100 per ADR-0004.
+            assert uq.iv_rank_provider == pytest.approx(29.0098437)
+        finally:
+            await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_underlying_quote_raises_when_metrics_missing(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return _token_response()
+            if request.url.path == "/market-data/by-type":
+                return _market_data_response([{"symbol": "AAPL", "last": "311.67"}])
+            if request.url.path == "/market-metrics":
+                return _market_metrics_response([])
+            return httpx.Response(404)
+
+        client = _make_client(handler)
+        try:
+            with pytest.raises(TastytradeUnavailable):
+                await client._fetch_underlying_quote("AAPL")
+        finally:
+            await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_front_expiry_navigates_nested_items(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return _token_response()
+            # Today's same-day expiry + future weeklies; helper must skip
+            # today and return the earliest > today.
+            return _nested_chain_response(
+                {
+                    date.today().isoformat(): [],
+                    (date.today() + timedelta(days=3)).isoformat(): [],
+                    (date.today() + timedelta(days=7)).isoformat(): [],
+                }
+            )
+
+        client = _make_client(handler)
+        try:
+            front = await client._fetch_front_expiry("AAPL")
+            assert front == date.today() + timedelta(days=3)
+        finally:
+            await client.aclose()
+
+    @pytest.mark.asyncio
+    async def test_front_expiry_raises_when_only_past_expirations(self):
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return _token_response()
+            return _nested_chain_response({date.today().isoformat(): []})
+
+        client = _make_client(handler)
+        try:
+            with pytest.raises(TastytradeUnavailable):
+                await client._fetch_front_expiry("AAPL")
+        finally:
+            await client.aclose()
+
+
+class TestGetIvSnapshotEndToEnd:
+    @pytest.mark.asyncio
+    async def test_happy_path_builds_snapshot_from_all_three_endpoints(self):
+        """End-to-end check: market-data + market-metrics + nested chain +
+        per-leg market-data are wired together correctly and
+        ``IVSnapshotRaw`` carries the expected fields."""
+        front = date.today() + timedelta(days=7)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == "/oauth/token":
+                return _token_response()
+            if request.url.path == "/market-data/by-type":
+                if request.url.params.get("equity") == "AAPL":
+                    return _market_data_response(
+                        [{"symbol": "AAPL", "last": "100.00", "mid": "100.05"}]
+                    )
+                # equity-option batch for the strike legs
+                return _market_data_response(
+                    [
+                        {"symbol": "AAPL-C100", "bid": "2.00", "ask": "2.20"},
+                        {"symbol": "AAPL-P100", "bid": "1.80", "ask": "2.00"},
+                    ]
+                )
+            if request.url.path == "/market-metrics":
+                return _market_metrics_response(
+                    [
+                        {
+                            "symbol": "AAPL",
+                            "implied-volatility-index": "0.30",
+                            "implied-volatility-index-rank": "0.45",
+                        }
+                    ]
+                )
+            if request.url.path == "/option-chains/AAPL/nested":
+                return _nested_chain_response(
+                    {
+                        front.isoformat(): [
+                            {"strike-price": "100.0", "call": "AAPL-C100", "put": "AAPL-P100"}
+                        ]
+                    }
+                )
+            return httpx.Response(404)
+
+        client = _make_client(handler)
+        try:
+            snap = await client.get_iv_snapshot("AAPL")
+            assert snap.ticker == "AAPL"
+            assert snap.iv30 == Decimal("0.3")
+            assert snap.iv_rank_provider == Decimal("45.0")
+            # Straddle mid = (2.10 + 1.90) / 100.00 = 0.04
+            assert snap.expected_move_pct == pytest.approx(Decimal("0.04"))
         finally:
             await client.aclose()

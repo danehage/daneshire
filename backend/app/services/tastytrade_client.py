@@ -65,8 +65,18 @@ class TastytradeClient:
 
     BASE_URL = "https://api.tastytrade.com"
     TOKEN_PATH = "/oauth/token"
-    CHAIN_QUOTES_PATH = "/option-chains/{symbol}/quotes"
-    QUOTE_PATH = "/market-data/{symbol}"
+    # Nested chain returns expirations + strikes (with OCC + streamer
+    # symbols) but no per-strike quotes. Quotes for each leg are fetched
+    # separately via /market-data/by-type?equity-option=SYM1,SYM2,...
+    NESTED_CHAIN_PATH = "/option-chains/{symbol}/nested"
+    # /market-data/by-type takes a query param naming the instrument
+    # type (`equity`, `equity-option`, ...) whose value is a comma-
+    # separated symbol list, and returns one item per symbol with
+    # bid/ask/mid/last.
+    MARKET_DATA_PATH = "/market-data/by-type"
+    # /market-metrics?symbols=A,B returns IV30, IV rank (0..1), HV,
+    # liquidity, dividend metadata, etc. — one item per symbol.
+    MARKET_METRICS_PATH = "/market-metrics"
 
     def __init__(
         self,
@@ -171,18 +181,74 @@ class TastytradeClient:
     # ------------------------------------------------------------------
 
     async def get_options_chain(self, ticker: str, expiry: date) -> list[dict]:
-        """Return raw option-chain rows for ``ticker`` at ``expiry``.
+        """Return option-chain rows for ``ticker`` at ``expiry``.
 
-        Each row is the provider's quote dict (strike, type, bid, ask,
-        last, updated-at, ...). Empty list if the chain does not exist
-        for that expiry (the chain is published but holds no rows for
-        the date).
+        Each row has the keys downstream helpers consume: ``strike-price``,
+        ``option-type`` (``"call"`` or ``"put"``), ``bid``, ``ask``,
+        ``last``, ``updated-at``. Empty list if no strikes are published
+        for ``expiry`` (or none of them have a market-data response).
+
+        Tastytrade's REST API requires two calls: the nested chain
+        endpoint gives the strike→OCC-symbol mapping, then
+        ``/market-data/by-type`` returns bid/ask/last per OCC symbol.
         """
-        path = self.CHAIN_QUOTES_PATH.format(symbol=ticker.upper())
-        payload = await self._authed_get(path, params={"expiration": expiry.isoformat()})
-        # Tastytrade wraps list results in {"data": {"items": [...]}}.
-        data = payload.get("data") or {}
-        return list(data.get("items") or [])
+        symbol = ticker.upper()
+        nested = await self._authed_get(
+            self.NESTED_CHAIN_PATH.format(symbol=symbol)
+        )
+        items = (nested.get("data") or {}).get("items") or []
+        if not items:
+            return []
+        target_exp = None
+        for exp_block in items[0].get("expirations") or []:
+            if exp_block.get("expiration-date") == expiry.isoformat():
+                target_exp = exp_block
+                break
+        if target_exp is None:
+            return []
+        strikes = target_exp.get("strikes") or []
+        if not strikes:
+            return []
+
+        # Build OCC-symbol → (strike-price, side) map for both legs of
+        # every published strike, then batch-fetch their quotes in one
+        # /market-data/by-type call.
+        occ_to_meta: dict[str, tuple[str, str]] = {}
+        for strike in strikes:
+            sp = strike.get("strike-price")
+            if sp is None:
+                continue
+            call_sym = strike.get("call")
+            put_sym = strike.get("put")
+            if call_sym:
+                occ_to_meta[call_sym] = (sp, "call")
+            if put_sym:
+                occ_to_meta[put_sym] = (sp, "put")
+        if not occ_to_meta:
+            return []
+        quotes_payload = await self._authed_get(
+            self.MARKET_DATA_PATH,
+            params={"equity-option": ",".join(occ_to_meta.keys())},
+        )
+        md_items = (quotes_payload.get("data") or {}).get("items") or []
+        rows: list[dict] = []
+        for md in md_items:
+            sym = md.get("symbol")
+            meta = occ_to_meta.get(sym)
+            if meta is None:
+                continue
+            strike_price, side = meta
+            rows.append(
+                {
+                    "strike-price": strike_price,
+                    "option-type": side,
+                    "bid": md.get("bid"),
+                    "ask": md.get("ask"),
+                    "last": md.get("last"),
+                    "updated-at": md.get("updated-at"),
+                }
+            )
+        return rows
 
     async def get_iv_snapshot(self, ticker: str) -> IVSnapshotRaw:
         """Build today's snapshot for ``ticker`` from a fresh chain pull.
@@ -194,12 +260,12 @@ class TastytradeClient:
         """
         symbol = ticker.upper()
 
-        # 1. Front-week expiry: pick the earliest published weekly that
-        # strictly follows today. The chain endpoint with no expiry
-        # returns the full chain; tastytrade exposes a separate metadata
-        # endpoint, but the chain payload also carries expirations.
-        underlying_quote = await self._fetch_underlying_quote(symbol)
-        front_expiry = await self._fetch_front_expiry(symbol)
+        # Underlying quote + front-week expiry can be fetched in parallel
+        # since neither depends on the other.
+        underlying_quote, front_expiry = await asyncio.gather(
+            self._fetch_underlying_quote(symbol),
+            self._fetch_front_expiry(symbol),
+        )
         chain = await self.get_options_chain(symbol, front_expiry)
         if not chain:
             raise TastytradeUnavailable(f"chain empty for {symbol} @ {front_expiry}")
@@ -227,39 +293,60 @@ class TastytradeClient:
     # ------------------------------------------------------------------
 
     async def _fetch_underlying_quote(self, symbol: str) -> "_UnderlyingQuote":
-        payload = await self._authed_get(self.QUOTE_PATH.format(symbol=symbol))
-        data = payload.get("data") or payload
+        """Combine the underlying's last-trade price (from market-data) with
+        its IV index + IV rank (from market-metrics). Tastytrade splits
+        these across two endpoints, so we fan out in parallel."""
+        md_payload, mm_payload = await asyncio.gather(
+            self._authed_get(self.MARKET_DATA_PATH, params={"equity": symbol}),
+            self._authed_get(self.MARKET_METRICS_PATH, params={"symbols": symbol}),
+        )
+        md_items = (md_payload.get("data") or {}).get("items") or []
+        mm_items = (mm_payload.get("data") or {}).get("items") or []
+        if not md_items:
+            raise TastytradeUnavailable(f"no market data for {symbol}")
+        if not mm_items:
+            raise TastytradeUnavailable(f"no market metrics for {symbol}")
+        md = md_items[0]
+        mm = mm_items[0]
         try:
-            price = float(data["last"]) if data.get("last") is not None else float(data["mid"])
-            iv30 = float(data["implied-volatility-30d"])
-            iv_rank = float(data["implied-volatility-rank"])
+            raw_price = md.get("last") if md.get("last") is not None else md.get("mid")
+            price = float(raw_price)
+            iv30 = float(mm["implied-volatility-index"])
+            # Tastytrade returns IV rank as a fraction in [0, 1]; the
+            # iv_snapshots.iv_rank column is constrained to [0, 100] to
+            # match ADR-0004's self-computed formula, so scale here.
+            iv_rank = float(mm["implied-volatility-index-rank"]) * 100.0
         except (KeyError, TypeError, ValueError) as exc:
             raise TastytradeUnavailable(
-                f"underlying quote missing required fields for {symbol}: {exc}"
+                f"underlying quote/metrics missing required fields for {symbol}: {exc}"
             ) from exc
         return _UnderlyingQuote(price=price, iv30=iv30, iv_rank_provider=iv_rank)
 
     async def _fetch_front_expiry(self, symbol: str) -> date:
+        """Return the earliest published expiration strictly after today."""
         payload = await self._authed_get(
-            f"/option-chains/{symbol}/nested",
+            self.NESTED_CHAIN_PATH.format(symbol=symbol)
         )
-        data = payload.get("data") or {}
-        items = data.get("items") or []
+        items = (payload.get("data") or {}).get("items") or []
         if not items:
-            raise TastytradeUnavailable(f"no expirations published for {symbol}")
-        # `items` is a list of {"expiration-date": "YYYY-MM-DD", ...} sorted ascending.
+            raise TastytradeUnavailable(f"no chain published for {symbol}")
+        # Real shape: items[0].expirations[*].expiration-date
+        expirations = items[0].get("expirations") or []
         today = date.today()
-        for item in items:
-            exp_str = item.get("expiration-date")
+        future: list[date] = []
+        for exp_block in expirations:
+            exp_str = exp_block.get("expiration-date")
             if not exp_str:
                 continue
             try:
-                exp = date.fromisoformat(exp_str)
+                d = date.fromisoformat(exp_str)
             except ValueError:
                 continue
-            if exp > today:
-                return exp
-        raise TastytradeUnavailable(f"no future expirations for {symbol}")
+            if d > today:
+                future.append(d)
+        if not future:
+            raise TastytradeUnavailable(f"no future expirations for {symbol}")
+        return min(future)
 
 
 # ---------------------------------------------------------------------------

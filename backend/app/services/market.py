@@ -378,7 +378,8 @@ class MarketData:
     async def _fetch_iv_snapshot(self, ticker: str) -> IVSnapshotRaw:
         if self._tastytrade is None:
             raise OptionsDataUnavailable(
-                ticker, "TastytradeClient not configured — set TASTYTRADE_REMEMBER_TOKEN"
+                ticker,
+                "TastytradeClient not configured — set TASTYTRADE_CLIENT_SECRET and TASTYTRADE_REFRESH_TOKEN",
             )
         try:
             return await self._tastytrade.get_iv_snapshot(ticker)

@@ -132,8 +132,8 @@ async def lifespan(app: FastAPI):
     except ValueError:
         finnhub = None
     # TastytradeClient is optional — app starts cleanly without the
-    # remember-token; the IV refresh endpoint will return 502 until the
-    # token is provisioned.
+    # OAuth credentials; the IV refresh endpoint will return 502 until
+    # TASTYTRADE_CLIENT_SECRET and TASTYTRADE_REFRESH_TOKEN are provisioned.
     try:
         tastytrade = TastytradeClient()
     except ValueError:

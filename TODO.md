@@ -337,3 +337,31 @@ See `DEPLOY.md` for full Cloud Run + Cloud Scheduler setup.
 | [#21](https://github.com/danehage/daneshire/issues/21) | Cloud Scheduler config + smoke | #18 |
 
 **Pickup:** #14 — earnings calendar tracer bullet (PRD §14 verbatim). Proves every layer end-to-end before any options data lands.
+
+---
+
+## Where We Left Off (2026-05-29) — Tastytrade hardening
+
+**TastytradeClient is now live-verified against `api.tastytrade.com`.** Two follow-up PRs after #15 landed the seam:
+
+**PR #34 — OAuth2 refresh-token migration (commit `5a3c97e`, 2026-05-28):**
+- Legacy `/sessions` password + remember-token flow hit Tastytrade's new device-challenge requirement, which Cloud Run can't satisfy (no persistent device fingerprint).
+- Switched to OAuth2 refresh-token grant (server-to-server): long-lived `refresh_token` + `client_secret` exchanged at `POST /oauth/token` for 15-min Bearer access tokens.
+- `tastytrade_client.py` rewritten: proactive refresh with 60s leeway, 401 retry fallback kept.
+- Config: dropped `tastytrade_remember_token`, added `tastytrade_client_secret` + `tastytrade_refresh_token`. `.env.example` and `DEPLOY.md` updated with the Create Grant flow.
+- Live-verified: `expires_in=900`, `token_type=Bearer`, refresh_token not rotated on use.
+- 18/18 tests pass (new coverage for proactive refresh + Bearer header).
+
+**PR #35 — REST endpoint alignment (commit `d22918b`, 2026-05-29):**
+- Original endpoint constants were never live-probed; OAuth migration removed the "retarget when live token provisioned" disclaimer without updating URLs. Direct probes revealed:
+  - `/market-data/{symbol}` → 404; `/option-chains/{symbol}/quotes` → 404
+  - `/option-chains/{symbol}/nested` → 200 (returns `items[0].expirations[*]`)
+  - `/market-data/by-type?equity=X` → 200 (bid/ask/last)
+  - `/market-data/by-type?equity-option=SYM1,SYM2,…` → 200 (per-leg, batched)
+  - `/market-metrics?symbols=X` → 200 (IV30 + IV rank)
+- Underlying quote is now two parallel calls (`by-type` for price + `market-metrics` for IV); IV rank scaled 0..1 → 0..100 to satisfy `iv_snapshots.iv_rank` CHECK constraint and align with ADR-0004.
+- Front expiry traversal fixed: walk `items[0].expirations[*].expiration-date` (one layer of nesting was missed).
+- `get_options_chain` rewired: nested chain → strike→OCC-symbol map; `by-type?equity-option=…` → per-leg quotes; merged into rows downstream helpers consume.
+- 7 new tests covering each endpoint and the end-to-end `get_iv_snapshot` happy path.
+
+**Status of earnings IV slices:** #15–#21 all merged (see commits `9656522`, `8dc3a98`, `b6944d9`, `fccb2d5`, `2a50fb1`, `f5c18d8`, `ffe45de`). The seam is now production-credible.

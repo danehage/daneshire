@@ -46,6 +46,22 @@ echo -n "your-chosen-username" | \
 gcloud secrets create auth-password --replication-policy="automatic"
 echo -n "your-secure-password" | \
   gcloud secrets versions add auth-password --data-file=-
+
+# Earnings module (Finnhub calendar)
+gcloud secrets create finnhub-api-key --replication-policy="automatic"
+echo -n "your-finnhub-api-key" | \
+  gcloud secrets versions add finnhub-api-key --data-file=-
+
+# Tastytrade OAuth2 (server-to-server refresh-token grant)
+# Obtain client_secret and refresh_token via the Create Grant flow in your
+# Tastytrade developer dashboard. See PR #34 / commit 5a3c97e for migration notes.
+gcloud secrets create tastytrade-client-secret --replication-policy="automatic"
+echo -n "your-tastytrade-client-secret" | \
+  gcloud secrets versions add tastytrade-client-secret --data-file=-
+
+gcloud secrets create tastytrade-refresh-token --replication-policy="automatic"
+echo -n "your-tastytrade-refresh-token" | \
+  gcloud secrets versions add tastytrade-refresh-token --data-file=-
 ```
 
 ---
@@ -72,6 +88,9 @@ gcloud run deploy danecast-trades \
   --set-secrets "SCHEDULER_SECRET=scheduler-secret:latest" \
   --set-secrets "AUTH_USERNAME=auth-username:latest" \
   --set-secrets "AUTH_PASSWORD=auth-password:latest" \
+  --set-secrets "FINNHUB_API_KEY=finnhub-api-key:latest" \
+  --set-secrets "TASTYTRADE_CLIENT_SECRET=tastytrade-client-secret:latest" \
+  --set-secrets "TASTYTRADE_REFRESH_TOKEN=tastytrade-refresh-token:latest" \
   --min-instances 0 \
   --max-instances 1 \
   --memory 512Mi \

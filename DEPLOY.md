@@ -62,6 +62,12 @@ echo -n "your-tastytrade-client-secret" | \
 gcloud secrets create tastytrade-refresh-token --replication-policy="automatic"
 echo -n "your-tastytrade-refresh-token" | \
   gcloud secrets versions add tastytrade-refresh-token --data-file=-
+
+# Portfolio screenshot parsing (Gemini vision)
+# Get a key at https://aistudio.google.com/apikey
+gcloud secrets create gemini-api-key --replication-policy="automatic"
+echo -n "your-gemini-api-key" | \
+  gcloud secrets versions add gemini-api-key --data-file=-
 ```
 
 ---
@@ -91,6 +97,7 @@ gcloud run deploy danecast-trades \
   --set-secrets "FINNHUB_API_KEY=finnhub-api-key:latest" \
   --set-secrets "TASTYTRADE_CLIENT_SECRET=tastytrade-client-secret:latest" \
   --set-secrets "TASTYTRADE_REFRESH_TOKEN=tastytrade-refresh-token:latest" \
+  --set-secrets "GEMINI_API_KEY=gemini-api-key:latest" \
   --min-instances 0 \
   --max-instances 1 \
   --memory 512Mi \

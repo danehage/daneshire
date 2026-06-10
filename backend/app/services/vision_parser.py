@@ -145,7 +145,10 @@ class GeminiVisionParser:
         account_hint: str | None = None,
     ) -> ParsedPortfolioSnapshot:
         try:
-            model = self._genai.GenerativeModel(self._model_name)
+            model = self._genai.GenerativeModel(
+                self._model_name,
+                generation_config={"response_mime_type": "application/json"},
+            )
             prompt_parts = [_SYSTEM_PROMPT]
             if account_hint:
                 prompt_parts.append(f"Account hint from user: {account_hint}")
@@ -153,14 +156,8 @@ class GeminiVisionParser:
                 {"mime_type": "image/png", "data": image_bytes}
             )
 
-            response = model.generate_content(prompt_parts)
-            raw_text = response.text.strip()
-            if raw_text.startswith("```"):
-                raw_text = raw_text.split("```")[1]
-                if raw_text.startswith("json"):
-                    raw_text = raw_text[4:].strip()
-
-            data = json.loads(raw_text)
+            response = await model.generate_content_async(prompt_parts)
+            data = json.loads(response.text)
             snapshot = ParsedPortfolioSnapshot.model_validate(data)
 
             if snapshot.confidence < CONFIDENCE_THRESHOLD:

@@ -72,6 +72,11 @@ Rules:
 2. Extract every position row: ticker symbol, quantity, average cost, and current
    market value. For option rows also extract strike price, expiry date, option type
    (call/put), multiplier (default 100 if visible), and the underlying ticker.
+   Brokers display options as a single description string — you MUST decompose it
+   into the separate fields. "ticker" is ONLY the underlying symbol, never the full
+   description. Example: a row labelled "AXON Sep 18 '26 $480 Call" becomes:
+     {"instrument_type": "option", "ticker": "AXON", "underlying_ticker": "AXON",
+      "option_type": "call", "strike": "480", "expiry": "2026-09-18", "multiplier": 100, ...}
 3. Extract cash / money-market balance as "cash_balance" if visible.
 4. Extract the total portfolio value as "parsed_total_value" if shown (separate from
    the sum of positions).
@@ -160,9 +165,7 @@ class GeminiVisionParser:
                 {"mime_type": "image/png", "data": image_bytes}
             )
 
-            response = await model.generate_content_async(prompt_parts)
-            data = json.loads(response.text)
-            snapshot = ParsedPortfolioSnapshot.model_validate(data)
+            snapshot = await self._generate_and_validate(model, prompt_parts)
 
             if snapshot.confidence < CONFIDENCE_THRESHOLD:
                 raise VisionLowConfidence(
@@ -179,3 +182,27 @@ class GeminiVisionParser:
                 raise VisionRateLimited(str(exc)) from exc
             logger.exception("Gemini parse failed")
             raise VisionUpstreamError(str(exc)) from exc
+
+    async def _generate_and_validate(
+        self, model, prompt_parts: list
+    ) -> ParsedPortfolioSnapshot:
+        """Call Gemini and validate the response, retrying once on schema errors.
+
+        The retry feeds the validation error back so the model can correct
+        field-mapping mistakes (e.g. a full option description left in
+        ``ticker`` instead of being decomposed into the option fields).
+        """
+        response = await model.generate_content_async(prompt_parts)
+        try:
+            return ParsedPortfolioSnapshot.model_validate(json.loads(response.text))
+        except Exception as exc:
+            logger.warning("Gemini response failed validation, retrying: %s", exc)
+            retry_parts = prompt_parts + [
+                "Your previous response failed schema validation with this error:\n"
+                f"{exc}\n"
+                "Return the corrected JSON object. Remember: \"ticker\" is only the "
+                "underlying symbol; option details belong in option_type / strike / "
+                "expiry / multiplier."
+            ]
+            response = await model.generate_content_async(retry_parts)
+            return ParsedPortfolioSnapshot.model_validate(json.loads(response.text))

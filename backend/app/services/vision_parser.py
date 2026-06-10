@@ -137,7 +137,7 @@ class GeminiVisionParser:
             raise ValueError("GEMINI_API_KEY is not configured")
 
         self._genai.configure(api_key=settings.gemini_api_key)
-        self._model_name = "gemini-1.5-flash"
+        self._model_name = "gemini-2.5-flash"
 
     async def parse_portfolio(
         self,

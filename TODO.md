@@ -340,6 +340,24 @@ See `DEPLOY.md` for full Cloud Run + Cloud Scheduler setup.
 
 ---
 
+## Where We Left Off (2026-06-10, later) — OCR flow live in production
+
+**Issue #11 merged (PR #36), deployed, and verified with a real E*Trade screenshot — all positions ingested.** Three production hotfixes landed during live testing, each found by a real upload:
+
+- `e2af59e` — `gemini-1.5-flash` was retired by Google (404); swapped to `gemini-2.5-flash`.
+- `301b249` — Gemini free-text mode returned malformed JSON; now uses enforced JSON mode (`response_mime_type=application/json`) + `generate_content_async` (the sync call was blocking the event loop).
+- `3ed3fe0` — short positions (qty -1, sold options) were rejected by `gt=0` on `ParsedPosition`/`HoldingCommit`; now nonzero-qty, prompt preserves the minus sign. Tests added.
+- `fbbef04` — broker option description strings ("AXON Sep 18 '26 $480 Call") landed whole in `ticker` (>20 chars); prompt now shows the decomposition example, and the adapter retries once feeding the Pydantic error back to Gemini. Verified against live Gemini with a replica screenshot.
+
+**Infra done this session:** `gemini-api-key` in Secret Manager + wired into cloudbuild (`518c0ed`); discovered master pushes auto-deploy via a Cloud Build trigger (manual `gcloud builds submit` needs `--substitutions COMMIT_SHA=…`). Gemini billing: prepaid credits on Dane's AI Studio project ($10 loaded 2026-06-10; a parse costs fractions of a cent).
+
+**Next:**
+- #12 — trade-confirmation OCR (now unblocked; reuses the VisionParser seam + modal)
+- #10 — `owned` watchlist status (unblocked since #9 merged; `needs-info` label is stale)
+- #37 — NEW: PortfolioEngine buy-to-close against a short baseline divides by zero (filed during short-position fix)
+
+---
+
 ## Where We Left Off (2026-06-10) — Issue #11
 
 **VisionParser + Gemini snapshot parse (issue #11) — branch finished locally, PR opened.**

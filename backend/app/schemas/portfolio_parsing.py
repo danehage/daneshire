@@ -2,13 +2,21 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ParsedPosition(BaseModel):
     instrument_type: str = Field(..., pattern="^(equity|option)$")
     ticker: str = Field(..., max_length=20)
-    qty: Decimal = Field(..., gt=0)
+    # Negative qty is a short position (sold options, short stock); zero is invalid.
+    qty: Decimal
+
+    @field_validator("qty")
+    @classmethod
+    def qty_nonzero(cls, v: Decimal) -> Decimal:
+        if v == 0:
+            raise ValueError("qty must be nonzero (negative = short position)")
+        return v
     avg_cost: Optional[Decimal] = Field(default=None, ge=0)
     market_value: Optional[Decimal] = None
     option_type: Optional[str] = Field(default=None, pattern="^(call|put)$")

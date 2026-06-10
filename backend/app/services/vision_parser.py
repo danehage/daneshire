@@ -76,10 +76,14 @@ Rules:
 4. Extract the total portfolio value as "parsed_total_value" if shown (separate from
    the sum of positions).
 5. Set "instrument_type" to "equity" for stocks/ETFs and "option" for options.
-6. Set "confidence" (0.0–1.0) reflecting how clearly you could read the screenshot.
+6. Short positions are valid and common (sold/written options, short stock). When a
+   row shows a negative quantity, return "qty" as a negative number — never drop the
+   minus sign. Keep the sign of "market_value" exactly as displayed (short positions
+   often show negative market value).
+7. Set "confidence" (0.0–1.0) reflecting how clearly you could read the screenshot.
    Use < 0.6 only if the image is blurry, partially cut off, or uses an unrecognised
    layout.
-7. Return ONLY the JSON object. No prose, no markdown fences.
+8. Return ONLY the JSON object. No prose, no markdown fences.
 
 JSON schema:
 {

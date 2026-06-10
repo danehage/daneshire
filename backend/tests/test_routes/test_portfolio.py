@@ -269,6 +269,53 @@ async def test_commit_options_position(client: AsyncClient):
 
 
 @pytest.mark.asyncio
+async def test_commit_short_position(client: AsyncClient):
+    """Short positions (negative qty — sold options, short stock) commit cleanly."""
+    payload = {
+        "account_name": "Taxable",
+        "captured_at": "2026-05-21T12:00:00Z",
+        "positions": [
+            {
+                "instrument_type": "option",
+                "ticker": "NVDA",
+                "qty": "-1",
+                "avg_cost": "8.20",
+                "market_value_at_snapshot": "-650.00",
+                "option_type": "put",
+                "strike": "600.00",
+                "expiry": "2026-07-17",
+                "multiplier": 100,
+                "underlying_ticker": "NVDA",
+            }
+        ],
+    }
+    response = await client.post("/api/portfolio/snapshots/commit", json=payload)
+    assert response.status_code == 201
+    holding = response.json()["holdings"][0]
+    assert Decimal(holding["qty"]) == Decimal("-1")
+    assert Decimal(holding["market_value_at_snapshot"]) == Decimal("-650")
+
+
+@pytest.mark.asyncio
+async def test_commit_zero_qty_rejected(client: AsyncClient):
+    """Zero qty is invalid — must be 422."""
+    payload = {
+        "account_name": "Taxable",
+        "captured_at": "2026-05-21T12:00:00Z",
+        "positions": [
+            {
+                "instrument_type": "equity",
+                "ticker": "AAPL",
+                "qty": "0",
+                "avg_cost": "100.00",
+            }
+        ],
+    }
+    response = await client.post("/api/portfolio/snapshots/commit", json=payload)
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_commit_snapshot_invalid_instrument_type(client: AsyncClient):
     """Invalid instrument_type returns 422."""
     payload = {

@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.schemas.portfolio_parsing import ParsedPortfolioSnapshot
 
@@ -49,8 +49,16 @@ class TradeResponse(BaseModel):
 class HoldingCommit(BaseModel):
     instrument_type: str = Field(..., pattern="^(equity|option)$")
     ticker: str = Field(..., max_length=20)
-    qty: Decimal = Field(..., gt=0)
+    # Negative qty is a short position (sold options, short stock); zero is invalid.
+    qty: Decimal
     avg_cost: Decimal = Field(..., ge=0)
+
+    @field_validator("qty")
+    @classmethod
+    def qty_nonzero(cls, v: Decimal) -> Decimal:
+        if v == 0:
+            raise ValueError("qty must be nonzero (negative = short position)")
+        return v
     market_value_at_snapshot: Optional[Decimal] = None
     option_type: Optional[str] = Field(default=None, pattern="^(call|put)$")
     strike: Optional[Decimal] = None

@@ -26,5 +26,9 @@ pytz>=2023.3
 pytest>=7.4.0
 pytest-asyncio>=0.23.0
 
+# Vision parsing (portfolio screenshot → structured JSON)
+google-generativeai>=0.8.0
+python-multipart>=0.0.9
+
 # Dev
 python-dotenv>=1.0.0

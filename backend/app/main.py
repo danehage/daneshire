@@ -116,6 +116,7 @@ from app.services.finnhub_client import FinnhubClient
 from app.services.market import MarketData
 from app.services.scanner import StockScanner
 from app.services.tastytrade_client import TastytradeClient
+from app.services.vision_parser import GeminiVisionParser
 
 
 @asynccontextmanager
@@ -139,6 +140,12 @@ async def lifespan(app: FastAPI):
     except ValueError:
         tastytrade = None
     app.state.market = MarketData(fmp, scanner, finnhub, tastytrade)
+    # GeminiVisionParser is optional — app starts cleanly without the key or
+    # when the library is unavailable; /snapshots/parse returns 503 until configured.
+    try:
+        app.state.vision_parser = GeminiVisionParser()
+    except (ValueError, ImportError):
+        app.state.vision_parser = None
     yield
     # Shutdown
     if tastytrade is not None:

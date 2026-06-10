@@ -1,0 +1,34 @@
+from datetime import date, datetime
+from decimal import Decimal
+from typing import Optional
+
+from pydantic import BaseModel, Field
+
+
+class ParsedPosition(BaseModel):
+    instrument_type: str = Field(..., pattern="^(equity|option)$")
+    ticker: str = Field(..., max_length=20)
+    qty: Decimal = Field(..., gt=0)
+    avg_cost: Optional[Decimal] = Field(default=None, ge=0)
+    market_value: Optional[Decimal] = None
+    option_type: Optional[str] = Field(default=None, pattern="^(call|put)$")
+    strike: Optional[Decimal] = None
+    expiry: Optional[date] = None
+    multiplier: Optional[int] = None
+    underlying_ticker: Optional[str] = Field(default=None, max_length=20)
+
+
+class ParsedPortfolioSnapshot(BaseModel):
+    """Structured output from the VisionParser.
+
+    ``confidence`` is 0–1; values below the adapter's threshold cause it to
+    raise ``VisionLowConfidence`` instead of returning this object.
+    """
+
+    account_name: Optional[str] = None
+    account_type: Optional[str] = None
+    captured_at: Optional[datetime] = None
+    cash_balance: Optional[Decimal] = None
+    parsed_total_value: Optional[Decimal] = None
+    positions: list[ParsedPosition] = Field(default_factory=list)
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)

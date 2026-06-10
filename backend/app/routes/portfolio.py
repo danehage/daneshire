@@ -3,26 +3,33 @@ from decimal import Decimal
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.models.portfolio import Account, Holding, PortfolioSnapshot, Trade
-from app.routes.dependencies import get_portfolio_engine
+from app.routes.dependencies import get_portfolio_engine, get_vision_parser
 from app.schemas.portfolio import (
     AccountResponse,
     ComputedHoldingResponse,
     PortfolioSnapshotCommit,
     PortfolioSnapshotResponse,
     PortfolioValueResponse,
+    SnapshotDiffResponse,
     TradeCommit,
     TradeResponse,
     ValueHistoryPoint,
     ValueHistoryResponse,
 )
 from app.services.portfolio_engine import PortfolioEngine
+from app.services.vision_parser import (
+    VisionLowConfidence,
+    VisionParser,
+    VisionRateLimited,
+    VisionUpstreamError,
+)
 
 router = APIRouter(prefix="/api/portfolio", tags=["portfolio"])
 
@@ -105,6 +112,49 @@ async def get_value_history(
             for p in vh.points
         ],
     )
+
+
+@router.post("/snapshots/parse", response_model=SnapshotDiffResponse)
+async def parse_snapshot(
+    image: UploadFile,
+    account_hint: Optional[str] = Query(default=None),
+    engine: PortfolioEngine = Depends(get_portfolio_engine),
+    parser: Optional[VisionParser] = Depends(get_vision_parser),
+    db: AsyncSession = Depends(get_db),
+):
+    """Parse a portfolio screenshot and return a diff vs current holdings.
+
+    Stateless — no DB writes. The frontend presents the parsed result in a
+    review pane and calls ``POST /snapshots/commit`` to persist.
+    """
+    if parser is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Vision parser is not configured (GEMINI_API_KEY missing).",
+        )
+
+    image_bytes = await image.read()
+    try:
+        parsed = await parser.parse_portfolio(image_bytes, account_hint=account_hint)
+    except VisionLowConfidence as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except VisionRateLimited as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except VisionUpstreamError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    # Resolve account_id from the parsed account name (or account_hint).
+    account_name = account_hint or parsed.account_name
+    account_id: Optional[UUID] = None
+    if account_name:
+        acc_result = await db.execute(
+            select(Account).where(Account.name == account_name)
+        )
+        account = acc_result.scalar_one_or_none()
+        if account is not None:
+            account_id = account.id
+
+    return await engine.compute_snapshot_diff(parsed=parsed, account_id=account_id)
 
 
 @router.post("/snapshots/commit", response_model=PortfolioSnapshotResponse, status_code=201)

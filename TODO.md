@@ -340,6 +340,19 @@ See `DEPLOY.md` for full Cloud Run + Cloud Scheduler setup.
 
 ---
 
+## Where We Left Off (2026-06-10) — Issue #11
+
+**VisionParser + Gemini snapshot parse (issue #11) — branch finished locally, PR opened.**
+
+- Picked up the stalled remote-agent branch `feat/issue-11-vision-parser-snapshot-parse` (built 2026-05-28, blocked on missing `NEON_DATABASE_URL` in the cloud session).
+- Rebased onto master across the #9 (trades), #13 (value-history chart), and Tastytrade OAuth merges. Conflicts in 6 files were all additive-vs-additive (new routes/schemas/tests on both sides) — resolved by keeping both.
+- Created a Neon branch `tests` (copy-on-write off `production`) so the destructive test fixtures never touch live data. `backend/.env` now points at it; production URL stays only in GCP Secret Manager.
+- Test results: 299 passed, 2 failed — both failures pre-exist on master and are env-dependent (`test_constructor_requires_both_credentials` fails when real Tastytrade creds are present in `.env`; `test_backfill_skips_future_events` same on master). Not related to #11.
+- Frontend `npm run build` passes.
+- Follow-ups: #10 (owned status) is unblocked now that #9 is merged — its `needs-info` label is stale. #12 (trade screenshot parse) unblocks once #11 merges. `GEMINI_API_KEY` secret still needs to be added to Secret Manager + cloudbuild before the parse endpoint works in production.
+
+---
+
 ## Where We Left Off (2026-05-29) — Tastytrade hardening
 
 **TastytradeClient is now live-verified against `api.tastytrade.com`.** Two follow-up PRs after #15 landed the seam:

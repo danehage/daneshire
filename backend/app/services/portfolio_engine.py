@@ -21,7 +21,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.portfolio import Holding, PortfolioSnapshot, Trade
-from app.schemas.portfolio import TradeCommit
+from app.schemas.portfolio import PositionDiff, SnapshotDiffResponse, TradeCommit
+from app.schemas.portfolio_parsing import ParsedPortfolioSnapshot
 from app.services.market import MarketData, MarketDataError
 
 
@@ -394,3 +395,94 @@ class PortfolioEngine:
         )
 
         return ValueHistory(account_id=account_id, points=points)
+
+    async def compute_snapshot_diff(
+        self,
+        parsed: ParsedPortfolioSnapshot,
+        account_id: UUID | None,
+    ) -> SnapshotDiffResponse:
+        """Compare a parsed snapshot against current computed holdings.
+
+        Pure: does not persist anything. ``account_id`` is None when the
+        parsed account name doesn't match any existing account, in which case
+        all positions are classified as ``new``.
+        """
+        current: list[ComputedHolding] = []
+        if account_id is not None:
+            current = await self.current_holdings(account_id)
+
+        current_by_key = {
+            (h.ticker.upper(), h.instrument_type): h for h in current
+        }
+        seen_keys: set[tuple[str, str]] = set()
+        diffs: list[PositionDiff] = []
+
+        for pos in parsed.positions:
+            key = (pos.ticker.upper(), pos.instrument_type)
+            seen_keys.add(key)
+            held = current_by_key.get(key)
+
+            if held is None:
+                status = "new"
+            else:
+                qty_changed = pos.qty != held.qty
+                avg_changed = (
+                    pos.avg_cost is not None
+                    and held.avg_cost is not None
+                    and abs(pos.avg_cost - held.avg_cost) > Decimal("0.01")
+                )
+                status = "changed" if (qty_changed or avg_changed) else "unchanged"
+
+            diffs.append(
+                PositionDiff(
+                    ticker=pos.ticker.upper(),
+                    instrument_type=pos.instrument_type,
+                    status=status,
+                    parsed_qty=pos.qty,
+                    computed_qty=held.qty if held else None,
+                    parsed_avg_cost=pos.avg_cost,
+                    computed_avg_cost=held.avg_cost if held else None,
+                    parsed_market_value=pos.market_value,
+                    computed_market_value=held.market_value if held else None,
+                )
+            )
+
+        for key, held in current_by_key.items():
+            if key not in seen_keys:
+                diffs.append(
+                    PositionDiff(
+                        ticker=held.ticker.upper(),
+                        instrument_type=held.instrument_type,
+                        status="removed",
+                        parsed_qty=None,
+                        computed_qty=held.qty,
+                        parsed_avg_cost=None,
+                        computed_avg_cost=held.avg_cost,
+                        parsed_market_value=None,
+                        computed_market_value=held.market_value,
+                    )
+                )
+
+        parsed_total = parsed.parsed_total_value
+        if current:
+            computed_total = sum(
+                (h.market_value for h in current if h.market_value is not None),
+                Decimal(0),
+            ) or None
+        else:
+            computed_total = None
+
+        totals_match = (
+            parsed_total is not None
+            and computed_total is not None
+            and abs(parsed_total - computed_total) <= Decimal("1.00")
+        )
+
+        return SnapshotDiffResponse(
+            parsed_snapshot=parsed,
+            position_diffs=diffs,
+            parsed_total_value=parsed_total,
+            computed_total_value=computed_total,
+            totals_match=totals_match,
+            account_id=account_id,
+        )

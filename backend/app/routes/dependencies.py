@@ -1,7 +1,7 @@
 """Shared FastAPI dependencies for route modules."""
 from uuid import UUID
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,6 +10,7 @@ from app.models.watchlist import WatchlistItem
 from app.services.alert_engine import AlertEngine
 from app.services.market import MarketData, get_market
 from app.services.portfolio_engine import PortfolioEngine
+from app.services.vision_parser import VisionParser
 
 
 def get_alert_engine(
@@ -35,6 +36,16 @@ def get_portfolio_engine(
     Tests substitute via ``app.dependency_overrides[get_portfolio_engine]``.
     """
     return PortfolioEngine(db=db, market=market)
+
+
+def get_vision_parser(request: Request) -> VisionParser:
+    """Return the singleton VisionParser from app.state.
+
+    Returns None when ``GEMINI_API_KEY`` is not configured; routes that
+    depend on this should check for None and return 503.
+    Tests substitute via ``app.dependency_overrides[get_vision_parser]``.
+    """
+    return getattr(request.app.state, "vision_parser", None)
 
 
 async def load_watchlist_item(

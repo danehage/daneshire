@@ -340,6 +340,20 @@ See `DEPLOY.md` for full Cloud Run + Cloud Scheduler setup.
 
 ---
 
+## Where We Left Off (2026-06-10, end of day) — Multi-account display fixes
+
+**Real four-account ingest (Individual, Roth IRA, Traditional IRA, Josephine UTMA — 16 holdings, ~$499k) exposed three display bugs, all fixed in `4ea2766`:**
+
+- `GET /api/portfolio` without `account_id` returned empty (leftover #8 behavior) → now aggregates all accounts (positions concatenated, totals/day-change summed, `last_snapshot_at` = stalest account). Frontend "All accounts" default and dashboard card both use it.
+- Dashboard portfolio card was hardcoded to `accounts[0]` — showed $65k instead of ~$499k.
+- `SnapshotReviewPane` UTC/local round-trip stored `captured_at` ~4h in the future ("snapshot from -1 days ago"). Fixed both directions; freshness labels clamp `<= 0` days to "today". The four future-dated production rows were repaired in place (`captured_at = created_at`).
+
+Verified live post-deploy: aggregate endpoint returns 16 positions, $499,467 total, correct timestamps. Docs refreshed this session: README (Gemini stack row, portfolio rewrite, API table, ~304 tests), CONTEXT.md (Portfolio domain vocabulary), DEPLOY.md (gemini-api-key setup).
+
+**Pickup next:** #12 (trade-confirmation OCR), #10 (`owned` status — stale `needs-info` label), #37 (short-position trade math).
+
+---
+
 ## Where We Left Off (2026-06-10, later) — OCR flow live in production
 
 **Issue #11 merged (PR #36), deployed, and verified with a real E*Trade screenshot — all positions ingested.** Three production hotfixes landed during live testing, each found by a real upload:

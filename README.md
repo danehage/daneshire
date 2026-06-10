@@ -12,7 +12,7 @@ Stock research terminal for swing trading and options strategies. Single-user ap
 - **Journal** — Trade notes with type badges (thesis, entry, exit, adjustment, review) and full-text search
 - **Scanner** — Find stocks meeting technical criteria with real-time SSE progress
 - **Ticker Detail** — Full technical analysis (RSI, HV Rank, support/resistance, moving averages)
-- **Portfolio** — Tastytrade-synced positions with live FMP marks, day change, cash, and value-over-time chart
+- **Portfolio** — screenshot-driven holdings: upload a broker screenshot (E*Trade or any), Gemini vision parses positions/cash/account into an editable review pane, commit persists. Multi-account with aggregate view, live FMP marks, day change, cash, value-over-time chart. Short positions and options (decomposed from broker description strings) supported
 - **Earnings Calendar** — Upcoming earnings dates from Finnhub with sortable views and date filtering
 - **Alerts** — Price and technical condition alerts with Pushover notifications
 - **Alert Engine** — Cloud Scheduler runs checks every 15 min during market hours
@@ -29,6 +29,7 @@ Stock research terminal for swing trading and options strategies. Single-user ap
 | Quotes / Historicals | Financial Modeling Prep (FMP) |
 | Earnings calendar | Finnhub |
 | Brokerage / Options IV | Tastytrade (OAuth2) |
+| Screenshot parsing | Gemini (`gemini-2.5-flash`, JSON mode) |
 | Deploy | GCP Cloud Run + Cloud Scheduler |
 
 ## Local Development
@@ -40,7 +41,8 @@ Stock research terminal for swing trading and options strategies. Single-user ap
 - Neon Postgres database
 - FMP API key (quotes, historicals)
 - Finnhub API key (earnings calendar)
-- Tastytrade OAuth credentials (portfolio sync + options IV) — optional, see DEPLOY.md
+- Tastytrade OAuth credentials (options IV) — optional, see DEPLOY.md
+- Gemini API key (portfolio screenshot parsing) — optional, get one at https://aistudio.google.com/apikey
 - Pushover keys (alert notifications) — optional
 
 ### Setup
@@ -63,6 +65,7 @@ FMP_API_KEY=your_fmp_key
 FINNHUB_API_KEY=your_finnhub_key
 TASTYTRADE_CLIENT_SECRET=your_tastytrade_oauth_client_secret
 TASTYTRADE_REFRESH_TOKEN=your_tastytrade_oauth_refresh_token
+GEMINI_API_KEY=your_gemini_key
 PUSHOVER_USER_KEY=your_user_key
 PUSHOVER_API_TOKEN=your_app_token
 SCHEDULER_SECRET=any_random_string
@@ -95,11 +98,12 @@ cd backend
 pytest tests/ -v
 ```
 
-~219 tests covering:
+~304 tests covering:
 - Watchlist, journal, price targets, alerts CRUD
 - Alert condition evaluator
 - Internal scheduler endpoints (price/technical/reminder/expire)
-- Portfolio engine + live mark math
+- Portfolio engine + live mark math, trades + layered compute, value history
+- Snapshot parse endpoint (FakeVisionParser): diff classification, error mapping, parse→commit round trip, short positions
 - Earnings calendar + earnings trade journal
 - Market seam: Finnhub client, Tastytrade client, IV / realized-move calculations
 
@@ -169,7 +173,13 @@ daneshire/
 | GET | `/api/ticker/{symbol}/analyze` | Technical analysis |
 | GET/POST | `/api/alerts` | List/create alerts |
 | POST | `/api/alerts/{id}/dismiss` | Dismiss alert |
-| GET | `/api/portfolio` | Positions, live marks, day change, cash |
+| GET | `/api/portfolio` | Positions, live marks, day change, cash (all accounts aggregated, or `?account_id=`) |
+| GET | `/api/portfolio/accounts` | List brokerage accounts |
+| POST | `/api/portfolio/snapshots/parse` | Parse portfolio screenshot via Gemini (stateless) |
+| POST | `/api/portfolio/snapshots/commit` | Persist reviewed snapshot + holdings |
+| POST | `/api/portfolio/trades/commit` | Record a trade fill |
+| GET | `/api/portfolio/trades` | Trade log |
+| GET | `/api/portfolio/value-history` | Sparse value series (snapshots + live point) |
 | GET | `/api/earnings/calendar` | Upcoming earnings (date range) |
 
 ## Alert Engine

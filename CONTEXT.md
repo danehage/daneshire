@@ -42,6 +42,22 @@ Each variant owns its own `.evaluate(observation) -> Outcome` and `.format() -> 
 
 **Deferred** — migrating the scanner's Stage 2 (`ThreadPoolExecutor` over `_process_ticker`) to consume MarketData. Today the scanner has its `FMPClient` injected by MarketData, so the throttle is already shared. Stage 2's parallelism shape is unchanged until a follow-up converts it to `asyncio.gather` with a semaphore.
 
+## Portfolio
+
+**Account** — an externally-managed brokerage container (Roth, taxable, IRA, UTMA). Stored in `accounts`. Seeded lazily — the first snapshot commit naming an unknown account creates the row.
+
+**Portfolio Snapshot** — an immutable record of an Account's positions + cash at a point in time, parsed from a single screenshot. Stored in `portfolio_snapshots`. `captured_at` is the screenshot's wall-clock moment (user-editable in the review pane), not the upload time.
+
+**Holding** — an immutable per-position row attached to a Portfolio Snapshot (FK, cascade delete). Captures `instrument_type` (equity | option), ticker, qty, avg_cost, market_value at snapshot time, and option-specific nullable fields (strike, expiry, option_type, multiplier, underlying_ticker). **Negative qty is a short position** (sold options, short stock); zero qty is invalid.
+
+**Trade** — an append-only record of one buy or sell fill. Stored in `trades`. Buys update running average cost; sells emit realized P/L as `(sell_price − avg_cost) × qty`. Average cost only — not tax-lot tracking.
+
+**Portfolio Engine** — orchestrator owning the layered model: current holdings = (latest snapshot per account) + (trades after that snapshot's `captured_at`). Lives in `backend/app/services/portfolio_engine.py`. Mirrors the Alert Engine pattern (orchestrator over the `MarketData` seam for live marks). `GET /api/portfolio` without `account_id` aggregates all accounts; `last_snapshot_at` on the aggregate is the *stalest* account's latest snapshot, so the freshness nudge reflects the account most in need of a re-upload.
+
+**Vision Parser** — single seam for screenshot-to-structured-data extraction. One adapter (`GeminiVisionParser`, `gemini-2.5-flash` in enforced JSON mode) behind a `VisionParser` protocol; the protocol exists for test injection (per ADR-0001), not vendor-swap futures. Parse is stateless (`POST /snapshots/parse` never writes); commit persists. Broker option description strings ("AXON Sep 18 '26 $480 Call") are decomposed into ticker + option fields — `ticker` is only ever the underlying symbol. On schema-validation failure the adapter retries once, feeding the Pydantic error back to the model. Error hierarchy: `VisionLowConfidence` → 422, `VisionRateLimited` → 429, `VisionUpstreamError` → 502, parser unconfigured → 503.
+
+**Owned Position** — *pending (#10)*: a watchlist item whose status is `owned`, auto-promoted when a snapshot commit includes its ticker.
+
 ## Scanner
 
 **HV Rank** — historical-volatility-rank proxy. Not implied volatility. UI labels must say "HV Rank", never "IV Rank".

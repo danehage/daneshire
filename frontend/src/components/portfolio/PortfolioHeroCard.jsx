@@ -4,7 +4,7 @@ function freshnessLabel(lastSnapshotAt) {
   const now = new Date();
   const diffMs = now - snapshotDate;
   const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
-  if (diffDays === 0) return "snapshot from today";
+  if (diffDays <= 0) return "snapshot from today";
   if (diffDays === 1) return "snapshot from 1 day ago";
   return `snapshot from ${diffDays} days ago`;
 }

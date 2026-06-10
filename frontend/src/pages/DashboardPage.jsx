@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useDashboardSummary } from "../hooks/useDashboard";
 import { useJournalSearch } from "../hooks/useJournal";
-import { useAccounts, usePortfolio } from "../hooks/usePortfolio";
+import { usePortfolio } from "../hooks/usePortfolio";
 import PortfolioSummaryCard from "../components/portfolio/PortfolioSummaryCard";
 
 const ENTRY_TYPE_COLORS = {
@@ -218,9 +218,8 @@ function SearchResultRow({ entry }) {
 
 export default function DashboardPage() {
   const { data, isLoading, error } = useDashboardSummary();
-  const { data: accounts } = useAccounts();
-  const firstAccountId = accounts?.[0]?.id ?? null;
-  const { data: portfolioData } = usePortfolio(firstAccountId);
+  // null account_id = aggregate across all accounts
+  const { data: portfolioData } = usePortfolio(null);
 
   if (isLoading) {
     return (
@@ -237,7 +236,10 @@ export default function DashboardPage() {
   }
 
   const { watchlist, alerts, recent_journal } = data;
-  const portfolioForCard = firstAccountId && portfolioData ? portfolioData : null;
+  const portfolioForCard =
+    portfolioData && (portfolioData.positions.length > 0 || portfolioData.last_snapshot_at)
+      ? portfolioData
+      : null;
 
   return (
     <div className="space-y-8">

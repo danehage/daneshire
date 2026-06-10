@@ -23,7 +23,7 @@ from app.schemas.portfolio import (
     ValueHistoryPoint,
     ValueHistoryResponse,
 )
-from app.services.portfolio_engine import PortfolioEngine
+from app.services.portfolio_engine import PortfolioEngine, PortfolioValue
 from app.services.vision_parser import (
     VisionLowConfidence,
     VisionParser,
@@ -45,23 +45,41 @@ async def list_accounts(db: AsyncSession = Depends(get_db)):
 async def get_portfolio(
     account_id: Optional[UUID] = Query(default=None),
     engine: PortfolioEngine = Depends(get_portfolio_engine),
+    db: AsyncSession = Depends(get_db),
 ):
     """Return live-marked portfolio value for an account.
 
-    When ``account_id`` is omitted the response has empty positions and
-    null metadata — the caller should select an account first.
+    When ``account_id`` is omitted, aggregates across all accounts:
+    positions concatenated, totals summed, ``last_snapshot_at`` set to the
+    stalest account's latest snapshot (so the freshness nudge reflects the
+    account most in need of a re-upload).
     """
     if account_id is None:
-        return PortfolioValueResponse(
-            account_id=None,
-            last_snapshot_at=None,
-            cash_balance=None,
-            total_value=Decimal(0),
-            day_change=Decimal(0),
-            positions=[],
-        )
+        acc_result = await db.execute(select(Account.id))
+        account_ids = list(acc_result.scalars().all())
+        if not account_ids:
+            return PortfolioValueResponse(
+                account_id=None,
+                last_snapshot_at=None,
+                cash_balance=None,
+                total_value=Decimal(0),
+                day_change=Decimal(0),
+                positions=[],
+            )
 
-    pv = await engine.portfolio_value(account_id)
+        values = [await engine.portfolio_value(aid) for aid in account_ids]
+        snapshot_times = [v.last_snapshot_at for v in values if v.last_snapshot_at]
+        cash_parts = [v.cash_balance for v in values if v.cash_balance is not None]
+        pv = PortfolioValue(
+            account_id=None,
+            positions=[h for v in values for h in v.positions],
+            last_snapshot_at=min(snapshot_times) if snapshot_times else None,
+            cash_balance=sum(cash_parts) if cash_parts else None,
+            total_value=sum((v.total_value for v in values), Decimal(0)),
+            day_change=sum((v.day_change for v in values), Decimal(0)),
+        )
+    else:
+        pv = await engine.portfolio_value(account_id)
     return PortfolioValueResponse(
         account_id=pv.account_id,
         last_snapshot_at=pv.last_snapshot_at,

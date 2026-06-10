@@ -173,11 +173,37 @@ async def test_get_portfolio_empty_account(client: AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_get_portfolio_no_account_id_returns_empty(client: AsyncClient):
-    """GET /api/portfolio with no account_id returns an empty PortfolioValueResponse."""
-    # Commit a snapshot so there is data in the DB
+async def test_get_portfolio_no_account_id_aggregates(client: AsyncClient):
+    """GET /api/portfolio with no account_id aggregates across all accounts."""
     await client.post("/api/portfolio/snapshots/commit", json=SNAPSHOT_PAYLOAD)
+    roth_payload = dict(
+        SNAPSHOT_PAYLOAD,
+        account_name="Roth IRA",
+        positions=[
+            {
+                "instrument_type": "equity",
+                "ticker": "GOOGL",
+                "qty": "3",
+                "avg_cost": "150.00",
+            }
+        ],
+    )
+    await client.post("/api/portfolio/snapshots/commit", json=roth_payload)
 
+    response = await client.get("/api/portfolio")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["account_id"] is None
+    tickers = {p["ticker"] for p in data["positions"]}
+    # Positions from BOTH accounts are present
+    assert {"GOOGL"} <= tickers
+    assert len(data["positions"]) == len(SNAPSHOT_PAYLOAD["positions"]) + 1
+    assert data["last_snapshot_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_get_portfolio_no_account_id_no_accounts(client: AsyncClient):
+    """No accounts at all still returns an empty aggregate, not an error."""
     response = await client.get("/api/portfolio")
     assert response.status_code == 200
     data = response.json()

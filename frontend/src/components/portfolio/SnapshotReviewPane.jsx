@@ -25,10 +25,15 @@ export default function SnapshotReviewPane({ diffData, onCommit, onCancel }) {
 
   const [accountName, setAccountName] = useState(parsed.account_name ?? "");
   const [accountType, setAccountType] = useState(parsed.account_type ?? "");
+  // datetime-local inputs hold LOCAL wall-clock time; toISOString() is UTC.
+  // Mixing them shifted captured_at hours into the future on commit.
+  const toLocalInputValue = (date) => {
+    const d = date ? new Date(date) : new Date();
+    d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
+    return d.toISOString().slice(0, 16);
+  };
   const [capturedAt, setCapturedAt] = useState(
-    parsed.captured_at
-      ? new Date(parsed.captured_at).toISOString().slice(0, 16)
-      : new Date().toISOString().slice(0, 16)
+    toLocalInputValue(parsed.captured_at)
   );
   const [cashBalance, setCashBalance] = useState(parsed.cash_balance ?? "");
   const [totalValue, setTotalValue] = useState(parsed.parsed_total_value ?? "");

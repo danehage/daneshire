@@ -524,7 +524,7 @@ export default function PortfolioPage() {
         <UploadReviewModal onClose={() => setShowUploadModal(false)} />
       )}
 
-      {selectedAccountId && portfolioData && (
+      {portfolioData && (portfolioData.positions.length > 0 || portfolioData.last_snapshot_at) && (
         <PortfolioHeroCard portfolio={portfolioData} />
       )}
 

@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.schemas.portfolio_parsing import ParsedPortfolioSnapshot
+from app.schemas.portfolio_parsing import ParsedPortfolioSnapshot, ParsedTrade
 
 
 class TradeCommit(BaseModel):
@@ -177,6 +177,21 @@ class ValueHistoryResponse(BaseModel):
 
     account_id: Optional[UUID]
     points: list[ValueHistoryPoint] = []
+
+
+class TradeParseResponse(BaseModel):
+    """Response from POST /api/portfolio/trades/parse.
+
+    Trades are append-only fills, so there is no diff against current
+    holdings — just the parsed object. ``account_id`` is resolved by
+    matching the parsed account name (or hint) against known accounts;
+    null means the frontend should make the user pick one.
+    """
+
+    model_config = ConfigDict(from_attributes=False)
+
+    parsed_trade: ParsedTrade
+    account_id: Optional[UUID] = None
 
 
 class PositionDiff(BaseModel):

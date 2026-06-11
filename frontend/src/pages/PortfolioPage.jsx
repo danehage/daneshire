@@ -515,7 +515,7 @@ export default function PortfolioPage() {
           onClick={() => setShowUploadModal(true)}
           className="px-4 py-2 text-sm font-medium uppercase tracking-wide border-2 border-accent text-accent hover:bg-accent hover:text-warm-white transition-all"
         >
-          ↑ Upload Snapshot
+          ↑ Upload Screenshot
         </button>
         <CommitSnapshotForm />
       </div>

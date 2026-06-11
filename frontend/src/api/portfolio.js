@@ -51,6 +51,18 @@ export async function getValueHistory(accountId) {
   return res.json();
 }
 
+export async function parseTrade(formData) {
+  const res = await fetch(`${API_BASE}/api/portfolio/trades/parse`, {
+    method: "POST",
+    body: formData,
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(detail.detail || `${res.status}: ${res.statusText}`);
+  }
+  return res.json();
+}
+
 export async function parseSnapshot(formData) {
   const res = await fetch(`${API_BASE}/api/portfolio/snapshots/parse`, {
     method: "POST",

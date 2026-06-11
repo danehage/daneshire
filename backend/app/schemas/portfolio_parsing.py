@@ -26,6 +26,30 @@ class ParsedPosition(BaseModel):
     underlying_ticker: Optional[str] = Field(default=None, max_length=20)
 
 
+class ParsedTrade(BaseModel):
+    """Structured output from VisionParser.parse_trade — a single fill.
+
+    ``qty`` is always positive; direction is carried by ``side`` (matching
+    ``TradeCommit``). ``executed_at`` defaults to end-of-day (23:59 local)
+    when the confirmation shows only a date — the review pane lets the user
+    edit before commit.
+    """
+
+    account_name: Optional[str] = None
+    ticker: str = Field(..., max_length=20)
+    instrument_type: str = Field(..., pattern="^(equity|option)$")
+    side: str = Field(..., pattern="^(buy|sell)$")
+    qty: Decimal = Field(..., gt=0)
+    price: Decimal = Field(..., ge=0)
+    executed_at: Optional[datetime] = None
+    option_type: Optional[str] = Field(default=None, pattern="^(call|put)$")
+    strike: Optional[Decimal] = None
+    expiry: Optional[date] = None
+    multiplier: Optional[int] = None
+    underlying_ticker: Optional[str] = Field(default=None, max_length=20)
+    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+
+
 class ParsedPortfolioSnapshot(BaseModel):
     """Structured output from the VisionParser.
 

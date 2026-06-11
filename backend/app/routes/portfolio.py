@@ -19,6 +19,7 @@ from app.schemas.portfolio import (
     PortfolioValueResponse,
     SnapshotDiffResponse,
     TradeCommit,
+    TradeParseResponse,
     TradeResponse,
     ValueHistoryPoint,
     ValueHistoryResponse,
@@ -231,6 +232,47 @@ async def commit_snapshot(
         .where(PortfolioSnapshot.id == snapshot.id)
     )
     return snap_result.scalar_one()
+
+
+@router.post("/trades/parse", response_model=TradeParseResponse)
+async def parse_trade(
+    image: UploadFile,
+    account_hint: Optional[str] = Query(default=None),
+    parser: Optional[VisionParser] = Depends(get_vision_parser),
+    db: AsyncSession = Depends(get_db),
+):
+    """Parse a trade-confirmation screenshot into a single fill.
+
+    Stateless — no DB writes. The frontend presents the parsed trade in a
+    review pane and calls ``POST /trades/commit`` to persist.
+    """
+    if parser is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Vision parser is not configured (GEMINI_API_KEY missing).",
+        )
+
+    image_bytes = await image.read()
+    try:
+        parsed = await parser.parse_trade(image_bytes, account_hint=account_hint)
+    except VisionLowConfidence as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except VisionRateLimited as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
+    except VisionUpstreamError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    account_name = account_hint or parsed.account_name
+    account_id: Optional[UUID] = None
+    if account_name:
+        acc_result = await db.execute(
+            select(Account).where(Account.name == account_name)
+        )
+        account = acc_result.scalar_one_or_none()
+        if account is not None:
+            account_id = account.id
+
+    return TradeParseResponse(parsed_trade=parsed, account_id=account_id)
 
 
 def _trade_response(trade: Trade, warnings: list[str] | None = None) -> TradeResponse:

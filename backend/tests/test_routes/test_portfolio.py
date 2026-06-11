@@ -11,12 +11,16 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 from app.main import app
 from app.models.portfolio import Account, PortfolioSnapshot, Holding, Trade
 from app.routes.dependencies import get_vision_parser
-from app.schemas.portfolio_parsing import ParsedPortfolioSnapshot, ParsedPosition
+from app.schemas.portfolio_parsing import (
+    ParsedPortfolioSnapshot,
+    ParsedPosition,
+    ParsedTrade,
+)
 from app.services.vision_parser import (
     VisionLowConfidence,
     VisionRateLimited,
@@ -650,14 +654,32 @@ _CANNED_SNAPSHOT = ParsedPortfolioSnapshot(
 class _FakeVisionParser:
     """Controllable stand-in for VisionParser used in parse-endpoint tests."""
 
-    def __init__(self, result=None, error=None):
+    def __init__(self, result=None, error=None, trade_result=None):
         self._result = result
         self._error = error
+        self._trade_result = trade_result
 
     async def parse_portfolio(self, image_bytes, account_hint=None):
         if self._error is not None:
             raise self._error
         return self._result or _CANNED_SNAPSHOT
+
+    async def parse_trade(self, image_bytes, account_hint=None):
+        if self._error is not None:
+            raise self._error
+        return self._trade_result or _CANNED_TRADE
+
+
+_CANNED_TRADE = ParsedTrade(
+    account_name="Taxable",
+    ticker="AAPL",
+    instrument_type="equity",
+    side="buy",
+    qty=Decimal("10"),
+    price=Decimal("190.50"),
+    executed_at=datetime(2026, 6, 10, 14, 30, 0, tzinfo=timezone.utc),
+    confidence=0.95,
+)
 
 
 def _fake_image_upload():
@@ -855,5 +877,200 @@ async def test_parse_snapshot_no_parser_configured(client: AsyncClient):
             files={"image": _fake_image_upload()},
         )
         assert response.status_code == 503
+    finally:
+        app.dependency_overrides.pop(get_vision_parser, None)
+
+
+# ---------------------------------------------------------------------------
+# POST /api/portfolio/trades/parse — VisionParser trade tests (issue #12)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_parse_trade_returns_parsed_trade(fake_parser_client: AsyncClient):
+    """POST /trades/parse returns the parsed fill; unknown account → null account_id."""
+    response = await fake_parser_client.post(
+        "/api/portfolio/trades/parse",
+        files={"image": _fake_image_upload()},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    trade = data["parsed_trade"]
+    assert trade["ticker"] == "AAPL"
+    assert trade["side"] == "buy"
+    assert trade["qty"] == "10"
+    assert trade["price"] == "190.50"
+    # No account named "Taxable" exists in this test → not resolved
+    assert data["account_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_parse_trade_resolves_known_account(
+    fake_parser_client: AsyncClient, db_session: AsyncSession
+):
+    """When the parsed account name matches an Account row, account_id is resolved."""
+    acct = Account(name="Taxable", account_type="individual")
+    db_session.add(acct)
+    await db_session.commit()
+
+    response = await fake_parser_client.post(
+        "/api/portfolio/trades/parse",
+        files={"image": _fake_image_upload()},
+    )
+    assert response.status_code == 200
+    assert response.json()["account_id"] == str(acct.id)
+
+
+@pytest.mark.asyncio
+async def test_parse_trade_no_db_writes(
+    fake_parser_client: AsyncClient, db_session: AsyncSession
+):
+    """POST /trades/parse is stateless: no Trade rows created."""
+    await fake_parser_client.post(
+        "/api/portfolio/trades/parse",
+        files={"image": _fake_image_upload()},
+    )
+    trades = (await db_session.execute(select(Trade))).scalars().all()
+    assert trades == []
+
+
+@pytest.mark.asyncio
+async def test_parse_trade_low_confidence_returns_422(client: AsyncClient):
+    """VisionLowConfidence from parse_trade maps to HTTP 422."""
+    app.dependency_overrides[get_vision_parser] = lambda: _FakeVisionParser(
+        error=VisionLowConfidence("Confidence 0.40 below threshold 0.60")
+    )
+    try:
+        response = await client.post(
+            "/api/portfolio/trades/parse",
+            files={"image": _fake_image_upload()},
+        )
+        assert response.status_code == 422
+    finally:
+        app.dependency_overrides.pop(get_vision_parser, None)
+
+
+@pytest.mark.asyncio
+async def test_parse_trade_no_parser_configured(client: AsyncClient):
+    """When vision_parser is None (not configured), /trades/parse returns 503."""
+    app.dependency_overrides[get_vision_parser] = lambda: None
+    try:
+        response = await client.post(
+            "/api/portfolio/trades/parse",
+            files={"image": _fake_image_upload()},
+        )
+        assert response.status_code == 503
+    finally:
+        app.dependency_overrides.pop(get_vision_parser, None)
+
+
+@pytest.mark.asyncio
+async def test_parse_trade_then_commit_round_trip(
+    fake_parser_client: AsyncClient, db_session: AsyncSession
+):
+    """Parse → commit (as the review pane does) → trade appears in GET /trades."""
+    acct = Account(name="Taxable", account_type="individual")
+    db_session.add(acct)
+    await db_session.commit()
+
+    parse_resp = await fake_parser_client.post(
+        "/api/portfolio/trades/parse",
+        files={"image": _fake_image_upload()},
+    )
+    assert parse_resp.status_code == 200
+    data = parse_resp.json()
+    parsed = data["parsed_trade"]
+
+    # The review pane lets the user override executed_at before commit
+    commit_payload = {
+        "account_id": data["account_id"],
+        "ticker": parsed["ticker"],
+        "instrument_type": parsed["instrument_type"],
+        "side": parsed["side"],
+        "qty": parsed["qty"],
+        "price": parsed["price"],
+        "executed_at": "2026-06-10T16:00:00Z",
+    }
+    commit_resp = await fake_parser_client.post(
+        "/api/portfolio/trades/commit", json=commit_payload
+    )
+    assert commit_resp.status_code == 201
+
+    trades_resp = await fake_parser_client.get(
+        f"/api/portfolio/trades?account_id={acct.id}"
+    )
+    assert trades_resp.status_code == 200
+    trades = trades_resp.json()
+    assert len(trades) == 1
+    assert trades[0]["ticker"] == "AAPL"
+    assert trades[0]["executed_at"].startswith("2026-06-10T16:00:00")
+
+
+@pytest.mark.asyncio
+async def test_parse_trade_option_fields_round_trip(
+    client: AsyncClient, db_session: AsyncSession
+):
+    """An option fill's strike/expiry/type survive parse → commit opaquely."""
+    acct = Account(name="Taxable", account_type="individual")
+    db_session.add(acct)
+    await db_session.commit()
+
+    option_trade = ParsedTrade(
+        account_name="Taxable",
+        ticker="AXON",
+        instrument_type="option",
+        side="sell",
+        qty=Decimal("1"),
+        price=Decimal("12.40"),
+        # Date-only confirmation → parser defaults to end of day
+        executed_at=datetime(2026, 6, 9, 23, 59, 0),
+        option_type="call",
+        strike=Decimal("480"),
+        expiry=datetime(2026, 9, 18).date(),
+        multiplier=100,
+        underlying_ticker="AXON",
+        confidence=0.9,
+    )
+    app.dependency_overrides[get_vision_parser] = lambda: _FakeVisionParser(
+        trade_result=option_trade
+    )
+    try:
+        parse_resp = await client.post(
+            "/api/portfolio/trades/parse",
+            files={"image": _fake_image_upload()},
+        )
+        assert parse_resp.status_code == 200
+        data = parse_resp.json()
+        parsed = data["parsed_trade"]
+        assert parsed["ticker"] == "AXON"
+        assert parsed["option_type"] == "call"
+        assert parsed["strike"] == "480"
+        assert parsed["expiry"] == "2026-09-18"
+        assert parsed["executed_at"].startswith("2026-06-09T23:59:00")
+
+        commit_payload = {
+            "account_id": data["account_id"],
+            "ticker": parsed["ticker"],
+            "instrument_type": parsed["instrument_type"],
+            "side": parsed["side"],
+            "qty": parsed["qty"],
+            "price": parsed["price"],
+            "executed_at": parsed["executed_at"],
+            "option_type": parsed["option_type"],
+            "strike": parsed["strike"],
+            "expiry": parsed["expiry"],
+            "multiplier": parsed["multiplier"],
+            "underlying_ticker": parsed["underlying_ticker"],
+        }
+        commit_resp = await client.post(
+            "/api/portfolio/trades/commit", json=commit_payload
+        )
+        assert commit_resp.status_code == 201
+        committed = commit_resp.json()
+        assert committed["option_type"] == "call"
+        # Numeric(12,4) pads to 4 decimal places — compare as Decimal
+        assert Decimal(committed["strike"]) == Decimal("480")
+        assert committed["expiry"] == "2026-09-18"
+        assert committed["multiplier"] == 100
     finally:
         app.dependency_overrides.pop(get_vision_parser, None)

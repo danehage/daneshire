@@ -540,6 +540,97 @@ async def test_trade_before_snapshot_is_ignored(db_session: AsyncSession):
 
 
 # ---------------------------------------------------------------------------
+# Short-baseline trade tests (issue #37)
+# ---------------------------------------------------------------------------
+
+
+SNAP_TIME = datetime(2026, 5, 21, 12, 0, 0, tzinfo=timezone.utc)
+TRADE_TIME = datetime(2026, 5, 22, 10, 0, 0, tzinfo=timezone.utc)
+
+
+@pytest.mark.asyncio
+async def test_trade_buy_exactly_closes_short(db_session: AsyncSession):
+    """Buy that exactly closes a short baseline removes the position (no ZeroDivisionError)."""
+    acct = await _insert_account(db_session)
+    snap = await _insert_snapshot(db_session, acct.id, captured_at=SNAP_TIME)
+    await _insert_holding(db_session, snap.id, "AXON", qty="-1", avg_cost="4.00")
+    await db_session.commit()
+
+    engine = PortfolioEngine(db=db_session, market=FakeMarket())
+    await _commit_trade(engine, acct.id, "AXON", "buy", "1", "3.00", TRADE_TIME)
+
+    holdings = await engine.current_holdings(acct.id)
+    assert all(h.ticker != "AXON" for h in holdings)
+
+
+@pytest.mark.asyncio
+async def test_trade_buy_partially_closes_short_preserves_avg(db_session: AsyncSession):
+    """Partial buy-to-close reduces the short toward zero; entry credit unchanged."""
+    acct = await _insert_account(db_session)
+    snap = await _insert_snapshot(db_session, acct.id, captured_at=SNAP_TIME)
+    await _insert_holding(db_session, snap.id, "AXON", qty="-2", avg_cost="4.00")
+    await db_session.commit()
+
+    engine = PortfolioEngine(db=db_session, market=FakeMarket())
+    await _commit_trade(engine, acct.id, "AXON", "buy", "1", "3.00", TRADE_TIME)
+
+    holdings = await engine.current_holdings(acct.id)
+    axon = next(h for h in holdings if h.ticker == "AXON")
+    assert axon.qty == Decimal("-1")
+    assert axon.avg_cost == Decimal("4.00")
+
+
+@pytest.mark.asyncio
+async def test_trade_buy_flips_short_to_long(db_session: AsyncSession):
+    """Buying through zero flips to long; avg cost is the buy price."""
+    acct = await _insert_account(db_session)
+    snap = await _insert_snapshot(db_session, acct.id, captured_at=SNAP_TIME)
+    await _insert_holding(db_session, snap.id, "AXON", qty="-1", avg_cost="4.00")
+    await db_session.commit()
+
+    engine = PortfolioEngine(db=db_session, market=FakeMarket())
+    await _commit_trade(engine, acct.id, "AXON", "buy", "3", "3.00", TRADE_TIME)
+
+    holdings = await engine.current_holdings(acct.id)
+    axon = next(h for h in holdings if h.ticker == "AXON")
+    assert axon.qty == Decimal("2")
+    assert axon.avg_cost == Decimal("3.00")
+
+
+@pytest.mark.asyncio
+async def test_trade_sell_grows_short_blends_avg(db_session: AsyncSession):
+    """Sell against a short grows it; avg cost blends the credit prices."""
+    acct = await _insert_account(db_session)
+    snap = await _insert_snapshot(db_session, acct.id, captured_at=SNAP_TIME)
+    await _insert_holding(db_session, snap.id, "AXON", qty="-1", avg_cost="4.00")
+    await db_session.commit()
+
+    engine = PortfolioEngine(db=db_session, market=FakeMarket())
+    await _commit_trade(engine, acct.id, "AXON", "sell", "1", "2.00", TRADE_TIME)
+
+    holdings = await engine.current_holdings(acct.id)
+    axon = next(h for h in holdings if h.ticker == "AXON")
+    assert axon.qty == Decimal("-2")
+    # blended credit: (1*4 + 1*2) / 2 = 3
+    assert axon.avg_cost == Decimal("3.00")
+
+
+@pytest.mark.asyncio
+async def test_trade_sell_against_short_no_realized_pl_no_warning(db_session: AsyncSession):
+    """Sell-to-open against a short baseline: no realized P/L, no oversell warning."""
+    acct = await _insert_account(db_session)
+    snap = await _insert_snapshot(db_session, acct.id, captured_at=SNAP_TIME)
+    await _insert_holding(db_session, snap.id, "AXON", qty="-1", avg_cost="4.00")
+    await db_session.commit()
+
+    engine = PortfolioEngine(db=db_session, market=FakeMarket())
+    result = await _commit_trade(engine, acct.id, "AXON", "sell", "1", "2.00", TRADE_TIME)
+
+    assert result.trade_row.realized_pl is None
+    assert result.warnings == []
+
+
+# ---------------------------------------------------------------------------
 # value_history tests
 # ---------------------------------------------------------------------------
 

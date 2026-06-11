@@ -172,9 +172,21 @@ class PortfolioEngine:
                     old_qty = positions[key]["qty"]
                     old_avg = positions[key]["avg_cost"]
                     new_qty = old_qty + trade.qty
-                    new_avg = (old_qty * old_avg + trade.qty * trade.price) / new_qty
-                    positions[key]["qty"] = new_qty
-                    positions[key]["avg_cost"] = new_avg
+                    if old_qty >= Decimal(0):
+                        new_avg = (old_qty * old_avg + trade.qty * trade.price) / new_qty
+                        positions[key]["qty"] = new_qty
+                        positions[key]["avg_cost"] = new_avg
+                    elif new_qty == Decimal(0):
+                        # buy exactly closes a short baseline
+                        del positions[key]
+                    elif new_qty < Decimal(0):
+                        # partial buy-to-close: short entry credit unchanged
+                        positions[key]["qty"] = new_qty
+                    else:
+                        # buy flips short to long: surviving shares were all
+                        # acquired at the trade price
+                        positions[key]["qty"] = new_qty
+                        positions[key]["avg_cost"] = trade.price
                 else:
                     positions[key] = {
                         "ticker": trade.ticker,
@@ -191,7 +203,15 @@ class PortfolioEngine:
                 if key in positions:
                     old_qty = positions[key]["qty"]
                     new_qty = old_qty - trade.qty
-                    if new_qty <= Decimal(0):
+                    if old_qty < Decimal(0):
+                        # sell-to-open grows the short: blend credit prices
+                        new_avg = (
+                            abs(old_qty) * positions[key]["avg_cost"]
+                            + trade.qty * trade.price
+                        ) / abs(new_qty)
+                        positions[key]["qty"] = new_qty
+                        positions[key]["avg_cost"] = new_avg
+                    elif new_qty <= Decimal(0):
                         del positions[key]
                     else:
                         positions[key]["qty"] = new_qty
@@ -233,7 +253,11 @@ class PortfolioEngine:
                     existing = h
                     break
 
-            if existing is not None:
+            if existing is not None and existing.qty <= Decimal(0):
+                # sell against a short baseline is sell-to-open: it grows the
+                # short, no realized P/L (buy-to-close P/L deferred, see #37)
+                pass
+            elif existing is not None:
                 held_qty = existing.qty
                 if parsed.qty > held_qty:
                     warnings.append(

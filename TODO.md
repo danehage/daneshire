@@ -340,6 +340,22 @@ See `DEPLOY.md` for full Cloud Run + Cloud Scheduler setup.
 
 ---
 
+## Where We Left Off (2026-06-11) — #37 short-trade math + #12 trade-confirmation OCR
+
+**#37 fixed (`01f32ab`):** PortfolioEngine trade application is now sign-aware against short baselines. Exact buy-to-close no longer raises ZeroDivisionError; partial close preserves the short's entry credit; buying through zero flips to long at the buy price; sells against shorts grow the position with blended credit avg instead of deleting it. `apply_trade` treats sell-against-short as sell-to-open (no realized P/L, no oversell warning) — buy-to-close realized P/L deliberately deferred. 5 new engine tests. Deployed + verified (Cloud Build SUCCESS).
+
+**#12 complete (`09c2b83`):** trade-confirmation screenshot → parse → review → commit.
+- `ParsedTrade` schema + `parse_trade` on the VisionParser protocol and Gemini adapter. Adapter refactored so both parse methods share one `_parse` helper (error mapping / confidence gate / validate-retry defined once). Trade prompt handles side normalization ("sold to open" → sell), option-description decomposition, per-contract premium, and date-only confirmations → 23:59 local.
+- `POST /api/portfolio/trades/parse` — stateless, resolves `account_id` by account-name match, returns `TradeParseResponse`. Same 422/429/502/503 mapping as snapshot parse.
+- Frontend: `TradeReviewPane` (editable form, option-leg fields, account dropdown preselected from resolved account), `UploadReviewModal` mode toggle (Portfolio Snapshot | Trade Confirmation, last-used in localStorage), oversell warnings shown on done screen. Page button renamed "Upload Screenshot".
+- Account dropdown limited to existing accounts — `/trades/commit` takes `account_id` and stays unmodified; new accounts arrive via snapshot upload.
+- Tests: 315 passing (only pre-existing env-dependent `test_backfill_skips_future_events` fails). Frontend build passes.
+- **Not yet done:** live smoke against a real trade-confirmation screenshot in production (dev-time, needs a real upload).
+
+**Next:** #10 — `owned` watchlist status (unblocked; `needs-info` label stale). Also: delete the merged leftover remote branch `feat/issue-9-trades-layered-compute`.
+
+---
+
 ## Where We Left Off (2026-06-10, end of day) — Multi-account display fixes
 
 **Real four-account ingest (Individual, Roth IRA, Traditional IRA, Josephine UTMA — 16 holdings, ~$499k) exposed three display bugs, all fixed in `4ea2766`:**

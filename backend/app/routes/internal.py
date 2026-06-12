@@ -28,6 +28,7 @@ from app.models.iv_snapshots import IVSnapshot
 from app.models.watchlist import WatchlistItem
 from app.routes.dependencies import get_alert_engine
 from app.schemas.alert_runs import RunSummary
+from app.schemas.backup import BackupResponse
 from app.schemas.earnings import (
     BackfillRealizedMovesSummary,
     CalendarRefreshSummary,
@@ -35,6 +36,7 @@ from app.schemas.earnings import (
 )
 from app.schemas.iv import IVSnapshotRaw
 from app.services.alert_engine import AlertEngine
+from app.services.backup import run_backup
 from app.services.market import MarketData, EarningsDateUnknown, MarketDataError, get_market, compute_realized_move
 from app.services.notifications import PushoverClient
 
@@ -356,6 +358,44 @@ async def backfill_realized_moves(
         processed=processed,
         skipped_no_history=skipped_no_history,
         total_events=total_events,
+    )
+
+
+@router.post("/db/backup", response_model=BackupResponse)
+async def run_db_backup(
+    _: None = Depends(verify_scheduler_secret),
+):
+    """Dump the production Neon database and upload it to GCS.
+
+    Cloud Scheduler calls this nightly. A non-2xx response causes
+    Cloud Scheduler to mark the execution as failed and retry.
+    """
+    if not settings.gcs_backup_bucket:
+        raise HTTPException(status_code=400, detail="GCS_BACKUP_BUCKET not configured")
+
+    result = await run_backup(settings.neon_database_url, settings.gcs_backup_bucket)
+
+    if not result.success:
+        pushover = PushoverClient()
+        if pushover.is_configured:
+            await pushover.send(
+                title="DB Backup Failed",
+                message=f"pg_dump → {result.gcs_path} failed: {result.error}",
+                priority="high",
+            )
+            await pushover.close()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Backup failed: {result.error}",
+        )
+
+    return BackupResponse(
+        success=result.success,
+        filename=result.filename,
+        gcs_path=result.gcs_path,
+        size_bytes=result.size_bytes,
+        duration_seconds=result.duration_seconds,
+        error=result.error,
     )
 
 

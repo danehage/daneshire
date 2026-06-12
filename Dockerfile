@@ -18,6 +18,10 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+# pg_dump is needed for the nightly backup job.
+RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
 # Install Python dependencies
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

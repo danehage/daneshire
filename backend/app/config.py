@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     pushover_user_key: str = ""
     pushover_api_token: str = ""
 
+    # Backup
+    gcs_backup_bucket: str = ""
+
     # Internal auth
     scheduler_secret: str = ""
 

@@ -14,6 +14,14 @@ gcloud services enable run.googleapis.com cloudbuild.googleapis.com cloudschedul
 
 ## 1. Set Up Secrets
 
+> **Backup bucket name** — needed for the nightly backup job (§4c below).
+> Add this secret alongside the others:
+> ```bash
+> gcloud secrets create gcs-backup-bucket --replication-policy="automatic"
+> echo -n "daneshire-db-backups" | \
+>   gcloud secrets versions add gcs-backup-bucket --data-file=-
+> ```
+
 Store sensitive values in Secret Manager (recommended) or as environment variables.
 
 ```bash
@@ -301,6 +309,110 @@ and `iv_snapshots`; no error rows in `alert_history` for alert_type
 
 ---
 
+## 4c. Nightly Database Backup (GCS)
+
+A nightly `pg_dump` of the production Neon database is triggered via Cloud
+Scheduler → `POST /api/internal/db/backup`. The dump is written in custom
+format (`-Fc`) to `gs://daneshire-db-backups/danecast-YYYY-MM-DD.dump` so
+`pg_restore` can do selective or full restores.
+
+### One-time setup
+
+**1. Create the GCS bucket with a 30-day lifecycle rule.**
+
+```bash
+GCS_PROJECT=$(gcloud config get-value project)
+gsutil mb -p ${GCS_PROJECT} -l us-central1 gs://daneshire-db-backups
+
+# Auto-delete objects older than 30 days
+cat > /tmp/lifecycle.json <<'EOF'
+{
+  "rule": [{
+    "action": {"type": "Delete"},
+    "condition": {"age": 30}
+  }]
+}
+EOF
+gsutil lifecycle set /tmp/lifecycle.json gs://daneshire-db-backups
+```
+
+**2. Grant the Cloud Run service account write access to the bucket.**
+
+```bash
+# Find the Cloud Run service account (usually Compute Engine default SA)
+SA=$(gcloud run services describe danecast-trades \
+  --region us-central1 \
+  --format 'value(spec.template.spec.serviceAccountName)')
+
+gsutil iam ch serviceAccount:${SA}:roles/storage.objectAdmin \
+  gs://daneshire-db-backups
+```
+
+**3. Bind the bucket name secret to Cloud Run.**
+
+Add to the `gcloud run deploy` command (or update the service):
+
+```bash
+--set-secrets "GCS_BACKUP_BUCKET=gcs-backup-bucket:latest"
+```
+
+### Create the Cloud Scheduler job
+
+```bash
+gcloud scheduler jobs create http db-nightly-backup \
+  --location us-central1 \
+  --schedule "0 2 * * *" \
+  --time-zone "America/New_York" \
+  --uri "${SERVICE_URL}/api/internal/db/backup" \
+  --http-method POST \
+  --headers "X-Scheduler-Secret=${SCHEDULER_SECRET}" \
+  --attempt-deadline 360s
+```
+
+The job runs at 2 AM ET every night. Cloud Scheduler retries on non-2xx;
+failures also trigger a Pushover notification (priority: high) if
+`PUSHOVER_USER_KEY` / `PUSHOVER_API_TOKEN` are set.
+
+### Verify a backup ran
+
+```bash
+# List objects in the bucket
+gsutil ls -l gs://daneshire-db-backups/
+
+# Check last scheduler execution
+gcloud scheduler jobs describe db-nightly-backup \
+  --location us-central1 \
+  --format "value(lastAttemptTime, status.code)"
+```
+
+### Restore procedure
+
+To restore a backup into a fresh Neon branch:
+
+```bash
+# 1. Create a fresh Neon branch in the Neon console (or via CLI)
+#    Get its connection string: postgresql://user:pass@host/db?sslmode=require
+
+# 2. Download the dump
+gsutil cp gs://daneshire-db-backups/danecast-YYYY-MM-DD.dump /tmp/restore.dump
+
+# 3. Restore (pg_restore ships with postgresql-client)
+pg_restore \
+  --no-owner \
+  --no-privileges \
+  -d "postgresql://user:pass@neon-host/dbname?sslmode=require" \
+  /tmp/restore.dump
+
+# 4. Run Alembic migrations if the backup pre-dates the current schema
+NEON_DATABASE_URL="postgresql+asyncpg://user:pass@neon-host/dbname?sslmode=require" \
+  alembic upgrade head
+
+# 5. Point the Cloud Run service at the restored branch:
+#    Update the neon-database-url secret version and redeploy.
+```
+
+---
+
 ## 5. Verify Deployment
 
 ```bash
@@ -331,6 +443,7 @@ curl -X POST ${SERVICE_URL}/api/internal/health \
 | `SCHEDULER_SECRET` | Secret for internal endpoints | Yes |
 | `AUTH_USERNAME` | Basic auth username for web access | Yes (prod) |
 | `AUTH_PASSWORD` | Basic auth password for web access | Yes (prod) |
+| `GCS_BACKUP_BUCKET` | GCS bucket name for nightly pg_dump backups | Yes (backup) |
 | `ENVIRONMENT` | `development` or `production` | No (default: development) |
 | `PORT` | Server port (Cloud Run sets this) | No (default: 8080) |
 

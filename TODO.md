@@ -340,6 +340,21 @@ See `DEPLOY.md` for full Cloud Run + Cloud Scheduler setup.
 
 ---
 
+## Where We Left Off (2026-06-12) — Prod-wipe recovery + earnings 5+5 window
+
+**Recovery from the 2026-06-11 prod wipe (pytest fixtures ran against prod via stale `.env`):**
+- Neon point-in-time restore was impossible — free plan retains only **6 hours** of history (the console's "Date should be after parent branch creation" error is a rolling window limit, confusingly worded). The `tests` branch was empty too (its own test runs). Pre-wipe watchlist/journal/alerts/trades data is gone.
+- Refill: `earnings_events` self-healed via the nightly backfill (274 rows). Portfolio re-uploaded by Dane via snapshot OCR. Remaining small stuff re-entered by hand as needed.
+- Guard landed (`41572e2`): `backend/tests/conftest.py` aborts pytest at import if `NEON_DATABASE_URL` targets the prod endpoint (`ep-billowing-dew-amz8z9f3`) or `ENVIRONMENT=production`. Plus `backend/scripts/db_inventory.py`, a read-only row-count/host-verification script. This machine's `.env` now points at the Neon `tests` branch.
+- Filed [#38](https://github.com/danehage/daneshire/issues/38): nightly `pg_dump` → GCS so data loss is never unrecoverable again.
+
+**Earnings screener — 5+5 trading-day window (frontend only):**
+- `EarningsPage.jsx` now always queries the next 10 trading days (weekends skipped, local-time dates): "This week" (next 5, prominent) + "On deck" (days 6–10, muted). Free-form From/To date pickers removed; min IV rank / edge ratio / volume filters, sorting, and URL param sync unchanged. Market holidays not excluded (show as empty days — revisit only if annoying).
+
+**Next:** #10 — `owned` watchlist status. #38 — backup job. Delete merged leftover remote branch `feat/issue-9-trades-layered-compute`.
+
+---
+
 ## Where We Left Off (2026-06-11) — #37 short-trade math + #12 trade-confirmation OCR
 
 **#37 fixed (`01f32ab`):** PortfolioEngine trade application is now sign-aware against short baselines. Exact buy-to-close no longer raises ZeroDivisionError; partial close preserves the short's entry credit; buying through zero flips to long at the buy price; sells against shorts grow the position with blended credit avg instead of deleting it. `apply_trade` treats sell-against-short as sell-to-open (no realized P/L, no oversell warning) — buy-to-close realized P/L deliberately deferred. 5 new engine tests. Deployed + verified (Cloud Build SUCCESS).

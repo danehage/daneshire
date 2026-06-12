@@ -22,6 +22,31 @@ function formatDate(dateStr) {
   return `${month}/${day}/${year}`;
 }
 
+// Local-time YYYY-MM-DD (toISOString would shift across the UTC boundary).
+function localISO(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+// Next `count` weekdays starting today (today included if it's a weekday).
+// Market holidays aren't excluded — a holiday just shows an empty day.
+function nextTradingDays(count) {
+  const days = [];
+  const d = new Date();
+  while (days.length < count) {
+    const dow = d.getDay();
+    if (dow !== 0 && dow !== 6) days.push(new Date(d));
+    d.setDate(d.getDate() + 1);
+  }
+  return days;
+}
+
+function shortDate(d) {
+  return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
 function SortButton({ label, field, sortField, sortDir, onSort }) {
   const active = sortField === field;
   const arrow = active ? (sortDir === 'asc' ? ' ↑' : ' ↓') : '';
@@ -53,6 +78,94 @@ function FilterInput({ label, value, onChange, placeholder, type = 'number', min
   );
 }
 
+function EventsTable({ events, sortField, sortDir, onSort }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full border-2 border-ink text-sm">
+        <thead>
+          <tr className="border-b-2 border-ink bg-warm-white">
+            <th className="px-4 py-3 text-left">
+              <SortButton label="Ticker" field="ticker" sortField={sortField} sortDir={sortDir} onSort={onSort} />
+            </th>
+            <th className="px-4 py-3 text-left">
+              <SortButton label="Report Date" field="report_date" sortField={sortField} sortDir={sortDir} onSort={onSort} />
+            </th>
+            <th className="px-4 py-3 text-left">
+              <SortButton label="Time" field="report_time" sortField={sortField} sortDir={sortDir} onSort={onSort} />
+            </th>
+            <th className="px-4 py-3 text-left">
+              <SortButton label="Period" field="fiscal_period" sortField={sortField} sortDir={sortDir} onSort={onSort} />
+            </th>
+            <th className="px-4 py-3 text-right">
+              <SortButton label="IV Rank" field="latest_iv_rank" sortField={sortField} sortDir={sortDir} onSort={onSort} />
+            </th>
+            <th className="px-4 py-3 text-right">
+              <SortButton label="Exp Move %" field="latest_expected_move_pct" sortField={sortField} sortDir={sortDir} onSort={onSort} />
+            </th>
+            <th className="px-4 py-3 text-right">
+              <SortButton label="Avg Realized %" field="historical_avg_realized_move_pct" sortField={sortField} sortDir={sortDir} onSort={onSort} />
+            </th>
+            <th className="px-4 py-3 text-right">
+              <SortButton label="Edge Ratio" field="edge_ratio" sortField={sortField} sortDir={sortDir} onSort={onSort} />
+            </th>
+          </tr>
+        </thead>
+        <tbody>
+          {events.map((event) => (
+            <tr
+              key={event.id}
+              className="border-b border-gray-200 dark:border-gray-700 hover:bg-warm-white transition-colors"
+            >
+              <td className="px-4 py-3 font-mono font-bold">
+                <Link
+                  to={`/ticker/${event.ticker}`}
+                  className="text-accent hover:underline"
+                >
+                  {event.ticker}
+                </Link>
+              </td>
+              <td className="px-4 py-3 text-ink">{formatDate(event.report_date)}</td>
+              <td className="px-4 py-3">
+                <span
+                  className={`inline-block px-2 py-0.5 text-xs font-semibold rounded ${
+                    REPORT_TIME_CLASS[event.report_time] || REPORT_TIME_CLASS.unknown
+                  }`}
+                >
+                  {REPORT_TIME_LABEL[event.report_time] ?? event.report_time}
+                </span>
+              </td>
+              <td className="px-4 py-3 text-mid-brown">
+                {event.fiscal_period || '—'}
+              </td>
+              <td className="px-4 py-3 text-right font-mono text-ink">
+                {event.latest_iv_rank != null
+                  ? Number(event.latest_iv_rank).toFixed(1)
+                  : '—'}
+              </td>
+              <td className="px-4 py-3 text-right font-mono text-ink">
+                {event.latest_expected_move_pct != null
+                  ? `${(Number(event.latest_expected_move_pct) * 100).toFixed(2)}%`
+                  : '—'}
+              </td>
+              <td className="px-4 py-3 text-right font-mono text-mid-brown">
+                {event.historical_avg_realized_move_pct != null
+                  ? `${(Number(event.historical_avg_realized_move_pct) * 100).toFixed(2)}%`
+                  : '—'}
+              </td>
+              <td className="px-4 py-3 text-right font-mono font-semibold text-ink">
+                {event.edge_ratio != null
+                  ? Number(event.edge_ratio).toFixed(2)
+                  : '—'}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="text-xs text-mid-brown mt-2">{events.length} events</p>
+    </div>
+  );
+}
+
 const DEBOUNCE_MS = 300;
 
 function useDebounced(value, delay = DEBOUNCE_MS) {
@@ -65,20 +178,14 @@ function useDebounced(value, delay = DEBOUNCE_MS) {
 }
 
 export default function EarningsPage() {
-  const todayStr = new Date().toISOString().split('T')[0];
-  const endDefault = new Date(Date.now() + 28 * 24 * 60 * 60 * 1000)
-    .toISOString()
-    .split('T')[0];
+  // Fixed window: the next 10 trading days, split 5 (prominent) + 5 (on deck).
+  const tradingDays = nextTradingDays(10);
+  const startDate = localISO(tradingDays[0]);
+  const week1End = localISO(tradingDays[4]);
+  const endDate = localISO(tradingDays[9]);
 
   const [searchParams, setSearchParams] = useSearchParams();
 
-  // Read initial state from URL, fall back to defaults.
-  const [startDate, setStartDate] = useState(
-    searchParams.get('start') || todayStr
-  );
-  const [endDate, setEndDate] = useState(
-    searchParams.get('end') || endDefault
-  );
   const [minIvRankInput, setMinIvRankInput] = useState(
     searchParams.get('min_iv_rank') || ''
   );
@@ -102,13 +209,11 @@ export default function EarningsPage() {
       return;
     }
     const p = {};
-    if (startDate) p.start = startDate;
-    if (endDate) p.end = endDate;
     if (minIvRank) p.min_iv_rank = minIvRank;
     if (minEdgeRatio) p.min_edge_ratio = minEdgeRatio;
     if (minVolume) p.min_volume = minVolume;
     setSearchParams(p, { replace: true });
-  }, [startDate, endDate, minIvRank, minEdgeRatio, minVolume, setSearchParams]);
+  }, [minIvRank, minEdgeRatio, minVolume, setSearchParams]);
 
   const [sortField, setSortField] = useState('edge_ratio');
   const [sortDir, setSortDir] = useState('desc');
@@ -163,42 +268,23 @@ export default function EarningsPage() {
     return compare(a, b, 'report_date', 'asc');
   });
 
+  // ISO dates compare correctly as strings.
+  const thisWeek = sorted.filter((e) => e.report_date <= week1End);
+  const onDeck = sorted.filter((e) => e.report_date > week1End);
+
   const hasFilters = Boolean(minIvRank || minEdgeRatio || minVolume);
 
   return (
     <div>
       <div className="mb-6">
         <h1 className="text-2xl font-serif font-bold text-ink mb-1">Earnings Screener</h1>
-        <p className="text-sm text-mid-brown">Upcoming earnings with IV rank, expected move, and edge ratio</p>
+        <p className="text-sm text-mid-brown">
+          Next 10 trading days of earnings with IV rank, expected move, and edge ratio
+        </p>
       </div>
 
-      {/* Date range + screener filters */}
+      {/* Screener filters */}
       <div className="flex flex-wrap gap-3 mb-6 items-end">
-        <div>
-          <label className="block text-xs font-semibold uppercase tracking-wide text-mid-brown mb-1">
-            From
-          </label>
-          <input
-            type="date"
-            value={startDate}
-            onChange={(e) => setStartDate(e.target.value)}
-            className="border-2 border-ink px-2 py-1 text-sm font-mono bg-warm-white"
-          />
-        </div>
-        <div>
-          <label className="block text-xs font-semibold uppercase tracking-wide text-mid-brown mb-1">
-            To
-          </label>
-          <input
-            type="date"
-            value={endDate}
-            onChange={(e) => setEndDate(e.target.value)}
-            className="border-2 border-ink px-2 py-1 text-sm font-mono bg-warm-white"
-          />
-        </div>
-
-        <div className="h-6 w-px bg-gray-300 dark:bg-gray-600 self-center mx-1" />
-
         <FilterInput
           label="Min IV Rank"
           value={minIvRankInput}
@@ -245,101 +331,55 @@ export default function EarningsPage() {
         </div>
       )}
 
-      {!isLoading && !isError && sorted.length === 0 && (
-        <div className="border-2 border-ink p-8 text-center">
-          <p className="text-mid-brown font-medium">No events match the current filters</p>
-          <p className="text-sm text-mid-brown mt-1">
-            {hasFilters
-              ? 'Try relaxing the filters or adjusting the date range.'
-              : 'Try adjusting the date range or run a calendar refresh.'}
-          </p>
-        </div>
-      )}
+      {!isLoading && !isError && (
+        <>
+          <h2 className="text-lg font-serif font-bold text-ink mb-2">
+            This week{' '}
+            <span className="text-sm font-sans font-normal text-mid-brown">
+              {shortDate(tradingDays[0])} – {shortDate(tradingDays[4])}
+            </span>
+          </h2>
+          {thisWeek.length > 0 ? (
+            <EventsTable
+              events={thisWeek}
+              sortField={sortField}
+              sortDir={sortDir}
+              onSort={handleSort}
+            />
+          ) : (
+            <div className="border-2 border-ink p-6 text-center mb-2">
+              <p className="text-mid-brown font-medium">
+                No events in the next 5 trading days
+              </p>
+              <p className="text-sm text-mid-brown mt-1">
+                {hasFilters
+                  ? 'Try relaxing the filters.'
+                  : 'Try running a calendar refresh.'}
+              </p>
+            </div>
+          )}
 
-      {!isLoading && !isError && sorted.length > 0 && (
-        <div className="overflow-x-auto">
-          <table className="w-full border-2 border-ink text-sm">
-            <thead>
-              <tr className="border-b-2 border-ink bg-warm-white">
-                <th className="px-4 py-3 text-left">
-                  <SortButton label="Ticker" field="ticker" sortField={sortField} sortDir={sortDir} onSort={handleSort} />
-                </th>
-                <th className="px-4 py-3 text-left">
-                  <SortButton label="Report Date" field="report_date" sortField={sortField} sortDir={sortDir} onSort={handleSort} />
-                </th>
-                <th className="px-4 py-3 text-left">
-                  <SortButton label="Time" field="report_time" sortField={sortField} sortDir={sortDir} onSort={handleSort} />
-                </th>
-                <th className="px-4 py-3 text-left">
-                  <SortButton label="Period" field="fiscal_period" sortField={sortField} sortDir={sortDir} onSort={handleSort} />
-                </th>
-                <th className="px-4 py-3 text-right">
-                  <SortButton label="IV Rank" field="latest_iv_rank" sortField={sortField} sortDir={sortDir} onSort={handleSort} />
-                </th>
-                <th className="px-4 py-3 text-right">
-                  <SortButton label="Exp Move %" field="latest_expected_move_pct" sortField={sortField} sortDir={sortDir} onSort={handleSort} />
-                </th>
-                <th className="px-4 py-3 text-right">
-                  <SortButton label="Avg Realized %" field="historical_avg_realized_move_pct" sortField={sortField} sortDir={sortDir} onSort={handleSort} />
-                </th>
-                <th className="px-4 py-3 text-right">
-                  <SortButton label="Edge Ratio" field="edge_ratio" sortField={sortField} sortDir={sortDir} onSort={handleSort} />
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {sorted.map((event) => (
-                <tr
-                  key={event.id}
-                  className="border-b border-gray-200 dark:border-gray-700 hover:bg-warm-white transition-colors"
-                >
-                  <td className="px-4 py-3 font-mono font-bold">
-                    <Link
-                      to={`/ticker/${event.ticker}`}
-                      className="text-accent hover:underline"
-                    >
-                      {event.ticker}
-                    </Link>
-                  </td>
-                  <td className="px-4 py-3 text-ink">{formatDate(event.report_date)}</td>
-                  <td className="px-4 py-3">
-                    <span
-                      className={`inline-block px-2 py-0.5 text-xs font-semibold rounded ${
-                        REPORT_TIME_CLASS[event.report_time] || REPORT_TIME_CLASS.unknown
-                      }`}
-                    >
-                      {REPORT_TIME_LABEL[event.report_time] ?? event.report_time}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-mid-brown">
-                    {event.fiscal_period || '—'}
-                  </td>
-                  <td className="px-4 py-3 text-right font-mono text-ink">
-                    {event.latest_iv_rank != null
-                      ? Number(event.latest_iv_rank).toFixed(1)
-                      : '—'}
-                  </td>
-                  <td className="px-4 py-3 text-right font-mono text-ink">
-                    {event.latest_expected_move_pct != null
-                      ? `${(Number(event.latest_expected_move_pct) * 100).toFixed(2)}%`
-                      : '—'}
-                  </td>
-                  <td className="px-4 py-3 text-right font-mono text-mid-brown">
-                    {event.historical_avg_realized_move_pct != null
-                      ? `${(Number(event.historical_avg_realized_move_pct) * 100).toFixed(2)}%`
-                      : '—'}
-                  </td>
-                  <td className="px-4 py-3 text-right font-mono font-semibold text-ink">
-                    {event.edge_ratio != null
-                      ? Number(event.edge_ratio).toFixed(2)
-                      : '—'}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <p className="text-xs text-mid-brown mt-2">{sorted.length} events</p>
-        </div>
+          <div className="mt-8 opacity-80">
+            <h2 className="text-base font-serif font-bold text-mid-brown mb-2">
+              On deck{' '}
+              <span className="text-sm font-sans font-normal">
+                {shortDate(tradingDays[5])} – {shortDate(tradingDays[9])}
+              </span>
+            </h2>
+            {onDeck.length > 0 ? (
+              <EventsTable
+                events={onDeck}
+                sortField={sortField}
+                sortDir={sortDir}
+                onSort={handleSort}
+              />
+            ) : (
+              <p className="text-sm text-mid-brown border-2 border-ink p-4">
+                No events in the following 5 trading days.
+              </p>
+            )}
+          </div>
+        </>
       )}
 
       <div className="mt-10">

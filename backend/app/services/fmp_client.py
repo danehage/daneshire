@@ -132,53 +132,79 @@ class FMPClient:
             logger.debug(f"Error fetching quote for {ticker}: {e}")
             return None
 
+    BATCH_QUOTE_CHUNK = 100
+
     async def get_batch_quotes(
         self, tickers: list[str], max_concurrent: int = 10
     ) -> dict[str, dict]:
         """
-        Fetch quotes for multiple tickers using parallel individual requests.
-        Returns dict mapping ticker -> quote data.
+        Fetch quotes via FMP's bulk endpoint, BATCH_QUOTE_CHUNK symbols per
+        request, with throttling and 429 retry. Returns dict mapping the
+        *requested* ticker -> quote data.
+
+        FMP returns dot-class symbols dashed (BRK.B -> BRK-B), so responses
+        are matched back to the requested spelling. If a whole chunk fails
+        (or the bulk endpoint is unavailable on the plan), falls back to
+        throttled individual requests for that chunk so symbols are never
+        silently dropped wholesale.
         """
-        all_quotes = {}
+        all_quotes: dict[str, dict] = {}
         total = len(tickers)
-        completed = 0
 
-        logger.info(f"Fetching quotes for {total} stocks...")
-
-        semaphore = asyncio.Semaphore(max_concurrent)
-
-        async def fetch_one(ticker: str, client: httpx.AsyncClient):
-            nonlocal completed
-            async with semaphore:
-                try:
-                    url = f"{self.BASE_URL}/stable/quote?symbol={ticker}&apikey={self.api_key}"
-                    response = await client.get(url)
-
-                    if response.status_code == 200:
-                        data = response.json()
-                        if isinstance(data, list) and len(data) > 0:
-                            all_quotes[ticker] = data[0]
-                        elif isinstance(data, dict) and data:
-                            all_quotes[ticker] = data
-
-                    elif response.status_code == 429:
-                        logger.warning(f"Rate limited on {ticker}")
-                        await asyncio.sleep(0.5)
-
-                except httpx.RequestError as e:
-                    logger.debug(f"Error fetching {ticker}: {e}")
-
-                completed += 1
-                if completed % 20 == 0:
-                    logger.info(f"Quote progress: {completed}/{total}")
+        logger.info(
+            f"Fetching quotes for {total} stocks "
+            f"({self.BATCH_QUOTE_CHUNK} per request)..."
+        )
 
         async with httpx.AsyncClient(timeout=15.0) as client:
-            await asyncio.gather(
-                *[fetch_one(ticker, client) for ticker in tickers],
-                return_exceptions=True,
-            )
+            for i in range(0, total, self.BATCH_QUOTE_CHUNK):
+                chunk = tickers[i : i + self.BATCH_QUOTE_CHUNK]
+                symbols = ",".join(chunk)
+                url = (
+                    f"{self.BASE_URL}/stable/batch-quote"
+                    f"?symbols={symbols}&apikey={self.api_key}"
+                )
+                response = await self._request_with_retry(url, client)
 
-        logger.info(f"Completed: {len(all_quotes)} quotes collected")
+                items = []
+                if response is not None:
+                    data = response.json()
+                    if isinstance(data, list):
+                        items = data
+
+                if items:
+                    by_symbol = {
+                        item["symbol"]: item for item in items if item.get("symbol")
+                    }
+                    for ticker in chunk:
+                        quote = by_symbol.get(ticker) or by_symbol.get(
+                            ticker.replace(".", "-")
+                        )
+                        if quote:
+                            all_quotes[ticker] = quote
+                else:
+                    logger.warning(
+                        f"Batch quote chunk failed ({len(chunk)} symbols); "
+                        "falling back to individual requests"
+                    )
+                    for ticker in chunk:
+                        single_url = (
+                            f"{self.BASE_URL}/stable/quote"
+                            f"?symbol={ticker}&apikey={self.api_key}"
+                        )
+                        single = await self._request_with_retry(single_url, client)
+                        if single is not None:
+                            data = single.json()
+                            if isinstance(data, list) and len(data) > 0:
+                                all_quotes[ticker] = data[0]
+                            elif isinstance(data, dict) and data:
+                                all_quotes[ticker] = data
+
+        missing = total - len(all_quotes)
+        logger.info(
+            f"Completed: {len(all_quotes)}/{total} quotes collected"
+            + (f" ({missing} missing)" if missing else "")
+        )
         return all_quotes
 
     async def get_historical_data(

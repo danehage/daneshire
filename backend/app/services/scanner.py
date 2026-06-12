@@ -284,7 +284,19 @@ class StockScanner:
                     survivors[ticker] = quote
 
             logger.info(f"{len(survivors)} stocks passed Stage 1 filters")
-            self._save_cache(cache_key, survivors)
+
+            # Only cache Stage 1 when the quote fetch was near-complete.
+            # A partial fetch (rate limiting, network blips) cached here
+            # would pin every later scan to the crippled set for the rest
+            # of the day.
+            coverage = len(all_quotes) / len(tickers) if tickers else 0.0
+            if coverage >= 0.9:
+                self._save_cache(cache_key, survivors)
+            else:
+                logger.warning(
+                    f"Quote coverage only {coverage:.0%} of universe; "
+                    "skipping Stage 1 cache so the next scan refetches"
+                )
 
         if not survivors:
             logger.error("No stocks passed Stage 1 filters")
